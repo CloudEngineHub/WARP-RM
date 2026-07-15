@@ -1,6 +1,6 @@
 # WARP-RM — Warp-Augmented Relative Progress Reward Model
 
-[Project Page](https://warp-rm.github.io) &ensp;|&ensp; [arXiv:2606.28320](https://arxiv.org/abs/2606.28320)
+[Project Page](https://uynitsuj.github.io/warp-rm/) &ensp;|&ensp; [arXiv:2606.28320](https://arxiv.org/abs/2606.28320)
 
 WARP-RM learns a dense, **signed relative-progress** signal from robot
 manipulation videos: per frame, *how fast and in which direction* the task is
