@@ -1,0 +1,71 @@
+[project]
+name = "warp-rm"
+version = "0.1.0"
+description = "WARP-RM: a Warp-Augmented Relative Progress reward model for robot demonstration curation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "scipy>=1.10.0",
+    "decord>=0.6.0",
+    "matplotlib>=3.8.0",
+    "pyyaml>=6.0",
+    "transformers>=4.40.0",
+    "tyro>=0.8.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+]
+
+[project.optional-dependencies]
+# Opt-in Weights & Biases logging: `uv sync --extra wandb`, then --wandb.
+wandb = ["wandb>=0.18.0"]
+# AWS CLI for the optional S3 upload paths (sidecar / checkpoint upload).
+# The code shells out to `aws`; a system-wide install works equally well.
+aws = ["awscli>=1.32.0"]
+
+# CUDA-build selectors for torch (dependency groups so they can be a default).
+# Exactly one is active per machine; use scripts/setup_torch.sh to auto-pick
+# based on the NVIDIA driver's max supported CUDA runtime.
+#   driver CUDA >= 13.0 -> cu130
+#   driver CUDA  = 12.8 -> cu128
+[dependency-groups]
+cu128 = ["torch==2.8.0"]
+cu130 = ["torch==2.11.0"]
+
+[tool.uv]
+# Which group uv sync / uv run uses when no flag is passed. The committed
+# default is cu128; machines needing cu130 drop a local uv.toml override
+# (written automatically by scripts/setup_torch.sh).
+default-groups = ["cu128"]
+conflicts = [
+    [
+        { group = "cu128" },
+        { group = "cu130" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", group = "cu128" },
+    { index = "pytorch-cu130", group = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url  = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url  = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["warp_rm*"]
