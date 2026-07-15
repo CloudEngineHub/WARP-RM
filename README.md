@@ -59,7 +59,7 @@ reward columns back into it:
 python scripts/data/write_warp_rm_annotations.py \
     --checkpoint checkpoints/best_model_<tag>.pt \
     --lerobot-repo /path/to/your/lerobot/dataset
-# → writes per-frame `warp_rm_signed_magnitude` (+ `warp_rm_progress`) columns
+# writes per-frame `warp_rm_signed_magnitude` (+ `warp_rm_progress`) columns
 ```
 
 See [`docs/recipe.md`](docs/recipe.md) for the full data → supervision
