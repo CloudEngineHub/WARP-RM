@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .preprocess import resize_frame
 from .video_reader import read_frames
 from .samplers import TrajectorySampler
 from .labelers import LabelGenerator
@@ -360,6 +361,7 @@ class OnlineVideoDataset(Dataset):
         mean: np.ndarray | None = None,
         std: np.ndarray | None = None,
         return_abs_labels: bool = False,
+        crop_mode: str = "squash",
     ):
         self.episodes = episodes
         self.sampler = sampler
@@ -368,6 +370,7 @@ class OnlineVideoDataset(Dataset):
         self.image_size = image_size
         self.mean = mean if mean is not None else np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = std if std is not None else np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.crop_mode = crop_mode
         self.return_abs_labels = return_abs_labels
 
         # Pre-compute n_feat per episode so sampler can use it
@@ -399,9 +402,7 @@ class OnlineVideoDataset(Dataset):
         # 4. Resize (skip if already correct size), normalise, to CHW tensor
         processed = []
         for frame in frames:
-            h, w = frame.shape[:2]
-            if h != self.image_size or w != self.image_size:
-                frame = cv2.resize(frame, (self.image_size, self.image_size))
+            frame = resize_frame(frame, self.image_size, self.crop_mode)
             frame = frame.astype(np.float32) / 255.0
             frame = (frame - self.mean) / self.std
             processed.append(frame.transpose(2, 0, 1))  # HWC -> CHW
@@ -457,6 +458,7 @@ class CachedVideoLoader:
         lookahead_batches: int = 4,
         epoch_seed: int | None = None,
         return_abs_labels: bool = False,
+        crop_mode: str = "squash",
     ):
         self.episodes = episodes
         self.sampler = sampler
@@ -465,6 +467,7 @@ class CachedVideoLoader:
         self.image_size = image_size
         self.mean = mean if mean is not None else np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = std if std is not None else np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.crop_mode = crop_mode
         self.batch_size = batch_size
         self.num_threads = num_threads
         self.lookahead_batches = lookahead_batches
@@ -501,9 +504,7 @@ class CachedVideoLoader:
         """Decode and preprocess a single frame. Returns (C, H, W) float32."""
         frames = read_frames(video_path, [frame_idx])
         frame = frames[0]
-        h, w = frame.shape[:2]
-        if h != self.image_size or w != self.image_size:
-            frame = cv2.resize(frame, (self.image_size, self.image_size))
+        frame = resize_frame(frame, self.image_size, self.crop_mode)
         frame = frame.astype(np.float32) / 255.0
         frame = (frame - self.mean) / self.std
         return frame.transpose(2, 0, 1)  # CHW
@@ -571,9 +572,7 @@ class CachedVideoLoader:
             raw_frames = read_frames(vpath, unique_indices)
             results = {}
             for fi, frame in zip(unique_indices, raw_frames):
-                h, w = frame.shape[:2]
-                if h != self.image_size or w != self.image_size:
-                    frame = cv2.resize(frame, (self.image_size, self.image_size))
+                frame = resize_frame(frame, self.image_size, self.crop_mode)
                 frame = frame.astype(np.float32) / 255.0
                 frame = (frame - self.mean) / self.std
                 results[(vpath, fi)] = frame.transpose(2, 0, 1)

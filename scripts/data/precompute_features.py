@@ -75,6 +75,13 @@ class Args:
     image_size: int = 224
     """Image size."""
 
+    crop_mode: str = "squash"
+    """Frame geometry: 'squash' (resize ignoring aspect ratio, the default and
+    a no-op for already-square videos) or 'center' (center-crop to the largest
+    centered square first). MUST match what training uses — the mode is part of
+    the feature-cache key, so a mismatch silently produces a second cache rather
+    than reusing the first."""
+
     batch_size: int = 512
     """GPU batch size (default: 512, A100 can handle 1024)."""
 
@@ -143,6 +150,7 @@ def main():
                 "--backbone", args.backbone,
                 "--feature-stride", str(args.feature_stride),
                 "--image-size", str(args.image_size),
+                "--crop-mode", args.crop_mode,
                 "--batch-size", str(args.batch_size),
                 "--decode-workers", str(args.decode_workers),
                 "--mega-batch", str(args.mega_batch),
@@ -224,6 +232,7 @@ def main():
         mean=backbone.MEAN, std=backbone.STD,
         decode_workers=args.decode_workers,
         mega_batch_episodes=args.mega_batch,
+        crop_mode=args.crop_mode,
         cameras=precompute_cameras,
     )
     print("Done.")

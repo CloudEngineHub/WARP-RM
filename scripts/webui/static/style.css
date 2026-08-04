@@ -1,0 +1,439 @@
+:root {
+  /* Matches src/visualization/plotting.py palette, refined for UI chrome. */
+  --bg:         #181826;   /* page background */
+  --bg-plot:    #0D0D1A;   /* plot-area background */
+  --bg-elev:    #21212F;   /* top bar, popover */
+  --bg-elev-2:  #2B2B3D;
+  --bg-input:   #13131E;
+  --border:     #2C2C3E;
+  --border-2:   #393952;
+  --grid:       #222244;
+  --spine:      #444466;
+  --fg:         #EAEAEA;
+  --fg-soft:    #C5C5D4;
+  --fg-muted:   #8A8A9E;
+  --fg-dim:     #63637A;
+  --accent:     #C9A86F;   /* warm sand — used sparingly */
+  --accent-ink: #0D0D1A;
+  --progress:   #9B59B6;   /* C_RECON */
+  --vel-pos:    #2ECC71;   /* C_VEL_POS */
+  --vel-neg:    #E74C3C;   /* C_VEL_NEG */
+  --cursor:     #F4D35E;
+  --display: "Fraunces", ui-serif, Georgia, serif;
+  --sans:    "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-feature-settings: "tnum" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 18px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  height: 46px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+
+.brand {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  padding-right: 14px;
+  border-right: 1px solid var(--border);
+}
+.brand span {
+  font-family: var(--sans);
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-left: 6px;
+  letter-spacing: 0;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inline-field > span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* ── RABC controls ───────────────────────────────────────────────── */
+
+.rabc-field {
+  gap: 10px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  height: 46px;
+}
+
+.rabc-field .num {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rabc-field .num > span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.rabc-field input[type="number"] {
+  width: 58px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+.rabc-field input[type="number"]::-webkit-outer-spin-button,
+.rabc-field input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.rabc-field input[type="number"]:focus { outline: none; border-color: var(--accent); }
+.rabc-field.disabled input[type="number"] { opacity: 0.45; }
+.rabc-field.disabled .num > span { opacity: 0.55; }
+
+.status {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  min-width: 110px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.status.busy { color: var(--accent); border-color: var(--border-2); }
+.status.err  { color: var(--vel-neg); border-color: var(--vel-neg); }
+
+/* ── Form primitives ─────────────────────────────────────────────── */
+
+select, input[type="search"], .picker-btn {
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 5px 10px;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.2;
+}
+select:focus, input:focus, .picker-btn:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-width: 160px;
+  max-width: 320px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+.picker-btn .caret { color: var(--fg-muted); font-size: 10px; margin-left: auto; }
+.picker-btn[aria-expanded="true"] { border-color: var(--accent); }
+
+.linkish {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 120ms;
+}
+.linkish:hover { text-decoration-color: var(--fg-muted); color: var(--fg); }
+
+/* ── Datasets popover ────────────────────────────────────────────── */
+
+.popover {
+  position: absolute;
+  top: 44px;
+  left: 280px;   /* roughly under the datasets button */
+  width: 380px;
+  max-height: 60vh;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+}
+.popover[hidden] { display: none; }
+.popover-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.popover-head input { flex: 1; }
+.popover-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.popover-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 14px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.popover-row:hover { background: var(--bg-elev-2); }
+.popover-row .mark {
+  color: var(--fg-dim);
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.popover-row.on .mark { color: var(--accent); }
+.popover-row.on .label { color: var(--fg); }
+.popover-row .label {
+  color: var(--fg-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.popover-row .count { color: var(--fg-dim); font-size: 11px; }
+.popover-row .tag-splits {
+  font-size: 10px;
+  color: #8ca0ff;
+  background: rgba(140,160,255,0.10);
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-left: 4px;
+  font-family: var(--mono);
+}
+
+/* ── Main grid ───────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: 240px minmax(360px, 1fr) minmax(440px, 1.25fr);
+  gap: 1px;
+  height: calc(100vh - 46px);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.episodes, .video-col, .plots {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── Panel heads ─────────────────────────────────────────────────── */
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  gap: 10px;
+}
+.panel-title {
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+.panel-foot {
+  padding: 6px 14px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.controls { display: flex; gap: 6px; }
+.controls input { width: 64px; }
+.controls select { padding: 4px 8px; font-size: 11px; }
+
+/* ── Episode list ────────────────────────────────────────────────── */
+
+.episode-list {
+  flex: 1;
+  overflow-y: auto;
+}
+.episode-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 14px;
+  cursor: pointer;
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+.episode-row:hover { background: var(--bg-elev); }
+.episode-row.active {
+  background: var(--bg-elev);
+  border-left-color: var(--accent);
+}
+.episode-row .name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.episode-row .src {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  margin-right: 4px;
+}
+.episode-row .length {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.episode-row .quality {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+}
+.episode-row .quality.pending {
+  color: var(--fg-dim);
+}
+
+/* ── Video column ────────────────────────────────────────────────── */
+
+.video-head {
+  padding: 12px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+#video-title {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#video-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+#video {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+.frame-strip {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-soft);
+  flex-wrap: wrap;
+}
+.frame-strip .muted { color: var(--fg-muted); }
+.weight-pill {
+  padding: 2px 10px;
+  border: 1px solid var(--border-2);
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.stats-inline { margin-left: auto; }
+.stats-inline b { color: var(--fg); font-weight: 500; }
+
+/* ── Plots column ────────────────────────────────────────────────── */
+
+.plots { overflow: hidden; }
+.plot-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-plot);
+}
+.plot-wrap + .plot-wrap { border-top: 1px solid var(--border); }
+.plot {
+  position: absolute;
+  inset: 0;
+}
+.plot-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 28px;       /* avoid the bottom axis area */
+  left: 46px;         /* plot margin.l in baseLayout */
+  width: 1.5px;
+  background: #F4D35E;
+  box-shadow: 0 0 6px rgba(244, 211, 94, 0.4);
+  pointer-events: none;
+  transform: translateX(0px);
+  will-change: transform;
+  opacity: 0.95;
+  z-index: 2;
+}
+.js-plotly-plot, .plot-container { height: 100% !important; }
+.js-plotly-plot .modebar { display: none !important; }
+
+.muted { color: var(--fg-muted); font-size: 12px; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-track { background: transparent; }
+

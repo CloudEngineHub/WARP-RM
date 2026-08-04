@@ -245,6 +245,12 @@ def main():
             )
         print(f"  feature_stride={feature_stride} (from --feature-stride)")
     standard_feat_steps = source_standard_stride // feature_stride
+    # Geometry must match training or features land in a different distribution
+    # than the model saw. Pre-crop-mode checkpoints carry no stamp -> "squash",
+    # which is what they were in fact trained with.
+    crop_mode = ckpt.get("crop_mode", "squash")
+    print(f"  crop_mode={crop_mode} "
+          f"({'from checkpoint' if ckpt.get('crop_mode') else 'legacy default'})")
     enhanced = has_abs_progress_head(model)
     print(f"  standard_stride_src={source_standard_stride}  "
           f"standard_feat_steps={standard_feat_steps}  enhanced={enhanced}")
@@ -275,7 +281,7 @@ def main():
     need_encoder = False
     for ep in episodes:
         if try_load_cached_features(ep, cache_dir, args.backbone,
-                                    feature_stride) is None:
+                                    feature_stride, crop_mode) is None:
             need_encoder = True
             break
     if need_encoder:
@@ -301,24 +307,26 @@ def main():
     cache_dir_path = Path(cache_dir)
 
     def _cache_feat_path(ep) -> Path:
-        key = hashlib.md5(
-            f"{ep.video_path}:{args.backbone}:{feature_stride}".encode()
-        ).hexdigest()[:12]
-        return cache_dir_path / f"{key}.npy"
+        # Canonical key (namespaced + crop-mode aware). The old inline md5 here
+        # reproduced only the legacy flat absolute-path key, so a center-crop
+        # run would have written its features over the squash cache entry.
+        from warp_rm.utils.caching import _ep_cache_path
+        return _ep_cache_path(str(cache_dir_path), ep, args.backbone,
+                              feature_stride, None, crop_mode)
 
     def _load_features_for(ep):
         """Feature-fetch for one episode; writes back to the disk cache on
         compute-miss so subsequent runs hit. Returns None if no encoder is
         available to compute a miss."""
         feat = try_load_cached_features(ep, cache_dir, args.backbone,
-                                        feature_stride)
+                                        feature_stride, crop_mode)
         if feat is not None:
             return feat
         if encoder is None:
             return None
         feat = extract_features_on_the_fly(
             encoder, ep, device, feature_stride, args.image_size,
-            backbone_obj.MEAN, backbone_obj.STD,
+            backbone_obj.MEAN, backbone_obj.STD, crop_mode=crop_mode,
         )
         try:
             cache_dir_path.mkdir(parents=True, exist_ok=True)

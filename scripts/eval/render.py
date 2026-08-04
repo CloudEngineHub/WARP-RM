@@ -98,6 +98,28 @@ def load_checkpoint(checkpoint_path: str, device: torch.device,
 
     model.load_state_dict(ckpt["model"], strict=False)
     model.eval()
+
+    # The abs-progress head is built unconditionally by TransformerAggregator,
+    # but RMLoss only trains it when the ablation enables it. On a `no_abs`
+    # checkpoint the head therefore carries INIT weights and emits a ~flat 0.5
+    # (the uniform bin prior) that is uncorrelated — often anti-correlated —
+    # with real progress. A bare hasattr() check cannot tell the two apart, so
+    # resolve it from the stamped ablation and mark the model. Consumers go
+    # through `has_abs_progress_head`, which honours the mark.
+    abs_trained = True
+    ablation_name = ckpt.get("ablation")
+    if ablation_name:
+        from warp_rm.core.ablation import get_ablation_configs
+        cfg = get_ablation_configs().get(ablation_name)
+        if cfg is not None:
+            abs_trained = bool(cfg.use_abs_progress)
+        else:
+            print(f"  WARNING: unknown ablation {ablation_name!r}; assuming the "
+                  f"abs head is trained")
+    model._warp_rm_abs_head_trained = abs_trained
+    if not abs_trained:
+        print(f"  abs head: UNTRAINED (ablation={ablation_name}) — suppressed "
+              f"from inference outputs")
     print(f"  step={ckpt.get('step', '?')}  "
           f"val_loss={ckpt.get('val_loss', float('nan')):.6f}  "
           f"val_spearman={ckpt.get('val_spearman', float('nan')):.4f}")
@@ -105,14 +127,15 @@ def load_checkpoint(checkpoint_path: str, device: torch.device,
 
 
 def try_load_cached_features(ep: Episode, cache_dir: str,
-                             backbone: str, feature_stride: int) -> np.ndarray | None:
+                             backbone: str, feature_stride: int,
+                             crop_mode: str = "squash") -> np.ndarray | None:
     """Try to load cached features for an episode. Returns None if not found.
 
     Prefers the stable (mount-prefix-agnostic) hash used by training, falls
     back to the legacy absolute-path hash for old caches. Mirrors the
     lookup in src.utils.caching._ep_cache_path — keep in sync."""
     from warp_rm.utils.caching import _ep_cache_path
-    cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride)
+    cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride, None, crop_mode)
     if cp.exists():
         return np.load(str(cp))
     return None
@@ -179,6 +202,7 @@ def main():
     model, ckpt = load_checkpoint(args.checkpoint, device)
 
     source_standard_stride = ckpt.get("standard_stride_src", 45)
+    crop_mode = ckpt.get("crop_mode", "squash")
     ckpt_feature_stride = ckpt.get("feature_stride")
     if args.feature_stride is None:
         if ckpt_feature_stride is None:
@@ -269,6 +293,7 @@ def main():
                 target_h=args.target_h,
                 out_fps=args.fps,
                 show_gt=args.show_gt,
+                crop_mode=crop_mode,
             )
         except Exception as e:
             import traceback

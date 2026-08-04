@@ -48,6 +48,7 @@ from warp_rm.data.dataset import (
 from warp_rm.data.lerobot_dataset import discover_lerobot_episodes
 from warp_rm.data.samplers import ARSampler, ContinuousWarpSampler, EvalSampler, TrueARSampler
 from warp_rm.data.labelers import RelativeCumulativeLabeler, DeltaVelocityLabeler
+from warp_rm.data.preprocess import CROP_MODES
 
 
 def _length_stats(n_frames: list[int]) -> str:
@@ -194,6 +195,23 @@ class Args:
     cleaner demos: smoother tempo, less hesitation, higher SNR. Legacy
     values 0.50 and 0.75 remain supported (earlier SOTA bases). 1.0 keeps all."""
 
+    min_frames: Optional[int] = None
+    """Drop episodes shorter than this many SOURCE frames, before every other
+    filter. Use it to cut truncated/aborted recordings that `--shortest-frac`
+    would otherwise preferentially KEEP (it selects the shortest episodes, so a
+    junk 2-second recording survives while a good 45-second demo is dropped).
+
+    A principled floor is one standard-stride window:
+    `(window_size - 1) * source_standard_stride + 2 * feature_stride`
+    — below that the sampler cannot lay down a standard-pace path and dense
+    inference falls back to a rescaled shorter stride."""
+
+    exclude_episode_index: tuple[int, ...] = ()
+    """Episode indices to drop outright (e.g. demos contaminated by a human
+    reaching into frame). Applied before every other filter. Indices are matched
+    per `Episode.episode_index`, which is only unambiguous with a single
+    --lerobot-repo; with several repos, prune upstream instead."""
+
     object_counts_json: Optional[str] = None
     """Path to an object_counts.json. When set, the shortest filter is applied
     per object-count stratum (group by count, keep shortest shortest_frac of
@@ -250,6 +268,21 @@ class Args:
     (`<root>/<backbone>_fs<stride>/`), and the value is stamped into the
     checkpoint so downstream scoring/inference paths pick it up
     automatically — never assume the global default at score time."""
+
+    crop_mode: str = "squash"
+    """Frame geometry when a decoded frame is not already `IMAGE_SIZE` square.
+
+    'squash' (default) resizes straight to 224x224, ignoring aspect ratio —
+    correct for datasets already converted to square videos (every LeRobot
+    dataset produced by the conversion scripts, which center-crop at encode
+    time), and a no-op there since the resize is skipped.
+
+    'center' center-crops to the largest centered square first, matching the
+    ffmpeg filter the conversion scripts apply. Use this for datasets stored at
+    their native non-square aspect ratio (e.g. 1280x720), where 'squash' would
+    compress the horizontal axis by 1.78x. The mode is mixed into the feature
+    cache key and stamped into the checkpoint, so scoring/inference reproduce
+    it automatically."""
 
     sampler: str = "ar"
     """Trajectory sampler. 'ar' (default — the WARP recipe) = ARSampler:
@@ -312,7 +345,7 @@ def build_model(ablation: AblationConfig, d_model: int, device: torch.device,
         token is one camera's feature) and the aggregator builds T*N tokens.
     """
     backbone_dim = d_model * n_cameras if fusion == "concat" else d_model
-    return TransformerAggregator(
+    model = TransformerAggregator(
         d_model=d_model, n_heads=N_HEADS, n_layers=N_LAYERS,
         dropout=DROPOUT, max_seq_len=MAX_SEQ_LEN,
         backbone_dim=backbone_dim,
@@ -325,6 +358,11 @@ def build_model(ablation: AblationConfig, d_model: int, device: torch.device,
         fusion=fusion,
         n_cameras=n_cameras,
     ).to(device)
+    # The abs head is always constructed but only supervised when the ablation
+    # enables it; mark it so `has_abs_progress_head` doesn't surface an
+    # untrained head's ~constant 0.5 output as a real prediction.
+    model._warp_rm_abs_head_trained = bool(ablation.use_abs_progress)
+    return model
 
 
 def run_experiment(ablation: AblationConfig, mode: str = "online",
@@ -334,6 +372,8 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    camera_key: str = "top_camera-images-rgb",
                    cameras: list[str] | None = None,
                    fusion: str = "concat",
+                   min_frames: int | None = None,
+                   exclude_episode_index: tuple[int, ...] = (),
                    shortest_frac: float = 1.0,
                    object_counts_json: str | None = None,
                    max_steps_override: int | None = None,
@@ -371,6 +411,7 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    labeler_mode: str = "relative",
                    label_anchor_frames: int = 15,
                    sampler_type: str = "continuous",
+                   crop_mode: str = "squash",
                    ar_center_stride_sec: float = 1.5,
                    ar_half_range_sec: float = 1.0,
                    ar_alpha: float = 0.5,
@@ -487,8 +528,36 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
         all_episodes.extend(eps)
     print(f"Found {len(all_episodes)} episodes")
 
+    if exclude_episode_index:
+        drop = set(int(i) for i in exclude_episode_index)
+        before = len(all_episodes)
+        kept_ep = [e for e in all_episodes if int(e.episode_index) not in drop]
+        found = drop.intersection(int(e.episode_index) for e in all_episodes)
+        missing = drop - found
+        print(f"[exclude] dropped {before - len(kept_ep)}/{before} episodes "
+              f"by index: {sorted(found)}")
+        if missing:
+            # Loud, not fatal: a typo'd index silently training on the episode
+            # you meant to remove is the failure mode worth surfacing.
+            print(f"[exclude] WARNING: indices not present in the dataset: "
+                  f"{sorted(missing)}")
+        all_episodes = kept_ep
+
+    if min_frames is not None:
+        before = len(all_episodes)
+        kept_ep = [e for e in all_episodes if e.n_frames >= min_frames]
+        dropped = sorted(e.n_frames for e in all_episodes if e.n_frames < min_frames)
+        print(f"[min_frames] >= {min_frames} src frames -> kept {len(kept_ep)}/{before}")
+        if dropped:
+            print(f"  dropped lengths: {dropped}")
+        all_episodes = kept_ep
+        if not all_episodes:
+            raise ValueError(f"min_frames={min_frames} removed every episode")
+
     if not 0.0 < shortest_frac <= 1.0:
         raise ValueError(f"shortest_frac must be in (0, 1], got {shortest_frac}")
+    if crop_mode not in CROP_MODES:
+        raise ValueError(f"--crop-mode must be one of {CROP_MODES}, got {crop_mode!r}")
     if object_counts_json is not None:
         with open(object_counts_json) as f:
             _oc = json.load(f)
@@ -640,6 +709,7 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
             batch_size=batch_size, num_threads=DECODE_THREADS,
             lookahead_batches=LOOKAHEAD_BATCHES,
             epoch_seed=SEED, return_abs_labels=needs_abs,
+            crop_mode=crop_mode,
         )
         train_backbone = backbone
         print(f"Online mode: threads={DECODE_THREADS}, lookahead={LOOKAHEAD_BATCHES}")
@@ -664,6 +734,7 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
             decode_workers=PRECACHE_DECODE_WORKERS,
             mega_batch_episodes=PRECACHE_MEGA_BATCH,
             cameras=precompute_cameras,
+            crop_mode=crop_mode,
         )
         torch.cuda.empty_cache()
         precompute_elapsed = time.time() - global_start
@@ -864,6 +935,10 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
         "rel_bin_min": rel_bin_min_use,
         "rel_bin_max": rel_bin_max_use,
         "standard_stride_src": sss,   # preserved for back-compat
+        "crop_mode": crop_mode,
+        "use_abs_progress": ablation.use_abs_progress,
+        "min_frames": min_frames,
+        "excluded_episode_index": list(exclude_episode_index),
         "feature_stride": feat_stride,
         "window_size": window_size,
         "sampler": sampler_type,
@@ -958,6 +1033,8 @@ def main():
         camera_key=args.camera_key,
         cameras=cameras,
         fusion=args.fusion,
+        min_frames=args.min_frames,
+        exclude_episode_index=args.exclude_episode_index,
         shortest_frac=args.shortest_frac,
         object_counts_json=args.object_counts_json,
         require_cached=args.require_cached,
@@ -971,6 +1048,7 @@ def main():
         feature_stride_override=args.feature_stride,
         rel_bin_max_override=args.rel_bin_max,
         sampler_type=args.sampler,
+        crop_mode=args.crop_mode,
         ar_center_stride_sec=args.ar_center_stride_sec,
         ar_half_range_sec=args.ar_half_range_sec,
         ar_alpha=args.ar_alpha,

@@ -33,6 +33,29 @@ WARP-RM trains and scores on **LeRobot v2.1 / v3.0** datasets of *successful*
 demonstrations (see [`docs/dataset_schema.md`](docs/dataset_schema.md) for the
 expected layout). The defaults **are** the recipe:
 
+> [!IMPORTANT]
+> **Is your dataset's video already square?** Check
+> `meta/info.json → features.<camera>.shape` before your first run.
+>
+> The default `--crop-mode squash` resizes each frame straight to 224×224
+> ignoring aspect ratio. That is a **no-op for square video** (the resize is
+> skipped), which is why it is the default — every dataset produced by the usual
+> LeRobot conversion scripts is already center-cropped to square at encode time.
+>
+> But if your videos are stored at a **native non-square** ratio — e.g.
+> `[720, 1280, 3]`, very common for off-the-shelf recordings — the default
+> **horizontally compresses every frame by 1.78×** and hands DINOv3 distorted
+> geometry (circles become ellipses). Pass `--crop-mode center` to center-crop to
+> the largest centered square first, matching what the conversion scripts do:
+>
+> ```bash
+> python scripts/train.py --crop-mode center --lerobot-repo /path/to/dataset
+> ```
+>
+> The mode is part of the feature-cache key and is stamped into the checkpoint,
+> so scoring, rendering and the inspector all reproduce it automatically — you
+> only set it at train time. See [`docs/dataset_schema.md`](docs/dataset_schema.md#frame-geometry--crop-mode).
+
 ```bash
 # Real T-shirt folding recipe: bidirectional attention, fs3/sss45, window 32, 15k steps.
 python scripts/train.py --lerobot-repo /path/to/your/lerobot/dataset
@@ -65,6 +88,33 @@ python scripts/data/write_warp_rm_annotations.py \
 See [`docs/recipe.md`](docs/recipe.md) for the full data → supervision
 walkthrough and [`docs/metrics_glossary.md`](docs/metrics_glossary.md) for
 every metric in the training logs.
+
+## Inspect predictions in the browser
+
+`scripts/webui/server.py` serves an interactive inspector: pick a checkpoint
+and a dataset, scrub an episode's video on the left, and watch the reconstructed
+progress / per-frame velocity / zoomed-velocity panels track the playhead on
+the right, shaded by the per-frame WARP-BC weight.
+
+```bash
+uv sync --extra webui                      # fastapi + uvicorn (ffmpeg also required)
+python scripts/webui/server.py \
+    --checkpoint checkpoints/best_model_<tag>.pt \
+    --dataset-root /path/to/datasets /another/root   # space-separated; scanned recursively
+# → http://127.0.0.1:8000
+```
+
+Two signal sources are switchable in the header: **ckpt** runs live dense
+inference from the loaded checkpoint, and **sidecar** reads the
+`warp_rm_progress` / `warp_rm_signed_magnitude` columns already injected into
+the dataset's parquets — no GPU required. Sorting the episode list by mean
+velocity reuses the summary cache that
+[`scripts/eval/score_episodes.py`](scripts/eval/score_episodes.py) writes, so an
+offline scoring pass populates the table for free. DINOv3 features are read from
+(and written to) the same cache the trainer uses, so a precached dataset costs
+no extra GPU here.
+
+See [`docs/webui.md`](docs/webui.md) for the endpoint reference and cache layout.
 
 ## Paper simulation
 
@@ -113,6 +163,7 @@ WARP-RM/
 │   ├── config.py                     # shared hyperparameters
 │   ├── data/{precompute_features,write_warp_rm_annotations,inject_rm_column}.py
 │   ├── eval/{score_episodes,render}.py
+│   ├── webui/                        # inspector web UI (server.py + static/)
 │   └── visualize_samplers.py         # visualize the WARP time-warp sampler
 ├── warp_rm/                          # the package
 │   ├── data/      {dataset, samplers, labelers, lerobot_dataset, video_reader, ...}.py
@@ -121,7 +172,7 @@ WARP-RM/
 │   ├── eval/      scoring.py
 │   ├── visualization/ {inference, renderer, plotting}.py
 │   └── utils/     {caching, environment, schema}.py
-└── docs/{recipe,dataset_schema,metrics_glossary}.md
+└── docs/{recipe,dataset_schema,metrics_glossary,webui}.md
 ```
 
 ## Configuration

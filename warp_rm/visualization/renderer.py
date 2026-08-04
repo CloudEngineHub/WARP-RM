@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 
 from ..data.dataset import Episode
+from ..data.preprocess import resize_frame
 from ..data.video_reader import read_frames, clear_video_cache
 from .inference import dense_inference_relative, dense_inference_absolute, has_abs_progress_head
 from .plotting import (
@@ -32,9 +33,14 @@ def extract_features_on_the_fly(
     mean: np.ndarray | None = None,
     std: np.ndarray | None = None,
     batch_size: int = 256,
+    crop_mode: str = "squash",
 ) -> np.ndarray:
     """
     Extract backbone features on-the-fly (no cache required).
+
+    ``crop_mode`` must match what the checkpoint was trained with, or the
+    features land in a different distribution than the model expects — see
+    `warp_rm.data.preprocess`.
 
     Returns (n_feat, D) float32 array matching the training cache format.
     """
@@ -60,7 +66,7 @@ def extract_features_on_the_fly(
         batch_raw = frames_raw[bi:bi + batch_size]
         processed = []
         for frame in batch_raw:
-            frame = cv2.resize(frame, (image_size, image_size))
+            frame = resize_frame(frame, image_size, crop_mode)
             frame = frame.astype(np.float32) / 255.0
             frame = (frame - mean) / std
             processed.append(frame)
@@ -90,6 +96,7 @@ def render_episode(
     target_h: int = 480,
     out_fps: float = 15.0,
     show_gt: bool = False,
+    crop_mode: str = "squash",
 ):
     """
     Full rendering pipeline: features -> dense inference -> video with plots.
@@ -109,6 +116,7 @@ def render_episode(
         target_h: Output video height
         out_fps: Output video FPS
         show_gt: If True, include ground truth row (linear 0->1)
+        crop_mode: Frame geometry; must match the checkpoint's training mode
     """
     if not episode.video_path.exists():
         print(f"  Video not found: {episode.video_path}")
@@ -121,7 +129,7 @@ def render_episode(
         print(f"  Extracting features ({episode.n_frames} src frames)...")
         feat_arr = extract_features_on_the_fly(
             encoder, episode, device, feature_stride, image_size,
-            backbone_mean, backbone_std,
+            backbone_mean, backbone_std, crop_mode=crop_mode,
         )
 
     print(f"  Running dense inference ({feat_arr.shape[0]} feature frames)...")

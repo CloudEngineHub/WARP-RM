@@ -126,8 +126,21 @@ def dense_inference_relative(
 
 
 def has_abs_progress_head(model: nn.Module) -> bool:
-    """Check if a model has a C51 absolute progress head."""
-    return hasattr(model, "abs_progress_head") and hasattr(model, "abs_bin_centers")
+    """True only if the model has a C51 absolute-progress head *that was trained*.
+
+    `TransformerAggregator` always constructs `abs_progress_head`, but `RMLoss`
+    only supervises it when the ablation sets `use_abs_progress` (i.e. NOT for
+    `no_abs`, `c51_only`, `baseline`, ...). An unsupervised head keeps its init
+    weights and emits a near-constant 0.5 — the uniform prior over its bins —
+    which is meaningless and frequently anti-correlated with real progress.
+
+    `scripts/eval/render.py:load_checkpoint` stamps `_warp_rm_abs_head_trained`
+    from the checkpoint's ablation. Models without the mark (built in-process,
+    or legacy) default to True, preserving the original behavior.
+    """
+    if not (hasattr(model, "abs_progress_head") and hasattr(model, "abs_bin_centers")):
+        return False
+    return bool(getattr(model, "_warp_rm_abs_head_trained", True))
 
 
 # ── Shared helpers for fused / bulk paths ────────────────────────────────────

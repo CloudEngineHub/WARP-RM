@@ -14,6 +14,18 @@ absolute-progress head (`--ablation full`); the recommended default drops it
 - **Filter** (`--shortest-frac 0.25`): keep the shortest 25% of episodes by
   `n_frames`. Shorter demos are smoother, more consistent-tempo, less hesitant —
   a cleaner reference for "expert pace" (v̂ ≈ 1).
+  > **This assumes every episode is a *complete* demo.** The filter selects the
+  > shortest episodes, so any truncated or aborted recording is exactly what it
+  > keeps — a 2-second fragment survives while a good 45-second demo is dropped,
+  > and `--clean-val` then draws the validation set from that same junk tail.
+  > On corpora with thousands of episodes the effect is diluted; on a few hundred
+  > it dominates. Check the low tail before trusting the default, and set
+  > `--min-frames` to cut it. A principled floor is one standard-stride window,
+  > `(window_size - 1) · SSS + 2 · feature_stride` (471 frames at N=32, SSS=15,
+  > fs=3) — below that the sampler cannot lay down a standard-pace path.
+- **Explicit pruning** (`--exclude-episode-index`): drop specific episodes by
+  index — e.g. demos where a human reaches into frame, which teach the model that
+  a hand is part of task progress.
 - **Train/val split** (`--clean-val`, default): `N_VAL = 20` validation episodes
   drawn from the shortest 15% of the kept pool, so val is the cleanest subset and
   the composite metric stays comparable across runs.
@@ -53,6 +65,64 @@ label[j] = label[j-1] + (idx[j] - idx[j-1]) · feature_stride
 With `SOURCE_STANDARD_STRIDE = 45`, `N = 32`: standard-pace forward → `[0,1]`,
 2× pace → `[0,2]`, reversed → `[-1,0]`, mid-rewind → non-monotonic / negative.
 These are cumulative signed progress values relative to the window's first frame.
+
+### 4a. Changing `--source-standard-stride` — retune the sampler with it
+
+**`--source-standard-stride` (SSS) and `--ar-center-stride-sec` are two halves of
+one calibration, and nothing in the code couples them.** SSS sets the label
+denominator (§4); the AR sampler's centre stride sets how far a window actually
+travels (§3). Changing one without the other rescales every label by
+`45 / SSS_new`.
+
+The invariant that keeps "standard pace ⇒ velocity 1.0":
+
+```
+label(window) = path_src / ((N-1) · SSS)      # §4, summed over the window
+path_src      = center_stride_sec · fps · (N-1)   # §3, ARSampler.__init__
+
+⇒ centred at 1.0  ⟺  center_stride_sec = SSS / fps
+```
+
+Default: `45 / 30 = 1.5 s` ✓. Keep `ar_half_range_sec / ar_center_stride_sec` at
+its default ratio (`1.0 / 1.5 = ⅔`) so the *relative* speed band is unchanged:
+
+| SSS | `--ar-center-stride-sec` | `--ar-half-range-sec` |
+|---|---|---|
+| 45 (default) | 1.5 | 1.0 |
+| 25 | 0.8333 | 0.5556 |
+| 15 | 0.5 | 0.3333 |
+
+Measured C51 target distribution (6k sampled windows, 32-frame window, fs=3) —
+labels are clamped to the head's `[-3, 3]` support at `warp_rm/core/loss.py:56`,
+so overflow is silently destroyed, not merely rare:
+
+| config | mean \|label\| | p99.9 | tokens clamped |
+|---|---|---|---|
+| SSS=45, centre 1.5 s (reference) | 0.33 | 1.20 | 0.00% |
+| SSS=15, sampler **left at 1.5 s** | 0.86 | 3.81 | **1.16%** (8.5% of windows) |
+| SSS=15, centre 0.5 s | 0.37 | 1.59 | 0.00% |
+| SSS=25, centre 0.8333 s | 0.36 | 1.57 | 0.00% |
+
+Recalibrated, the distribution lands on top of the reference. Left alone, the
+fast tail is clipped and the model learns a compressed velocity scale.
+
+Two further traps when picking SSS:
+
+- **Make `feature_stride` divide SSS.** `standard_feat_steps = SSS // fs` is
+  integer division, and it — not SSS — is what dense inference strides by. SSS=25
+  with fs=3 truncates `8.33 → 8`, so inference measures velocity against 24
+  source frames while the labels were normalised by 25: a constant ~4% scale
+  error. SSS=45/fs=3 and SSS=15/fs=3 are exact. (The paper's sim config,
+  `--feature-stride 1 --source-standard-stride 15`, is exact for the same
+  reason.)
+- **Check SSS against your episode lengths.** A standard-stride window spans
+  `(N-1)·SSS` source frames — 1395 (46.5 s) at the default. On episodes shorter
+  than that, `dense_inference_*` shrinks the stride and applies
+  `vel_scale = standard_feat_steps / std_step` to compensate
+  (`warp_rm/visualization/inference.py`). That rescale is *episode-length
+  dependent*, so velocities stop being directly comparable across episodes.
+  A dataset whose median episode is 43 s should use SSS≈15 (15.5 s window), not
+  the 45 default, which would push every episode onto the fallback path.
 
 ## 5. Architecture — `TransformerAggregator`
 

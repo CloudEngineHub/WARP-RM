@@ -24,6 +24,10 @@ wandb = ["wandb>=0.18.0"]
 # AWS CLI for the optional S3 upload paths (sidecar / checkpoint upload).
 # The code shells out to `aws`; a system-wide install works equally well.
 aws = ["awscli>=1.32.0"]
+# Inspector web UI: `uv sync --extra webui`, then scripts/webui/server.py.
+# Slicing LeRobot v3.0 concatenated video shards into per-episode clips also
+# needs `ffmpeg`/`ffprobe` on PATH (system package, not a Python dep).
+webui = ["fastapi>=0.110.0", "uvicorn>=0.29.0", "pydantic>=2.0.0"]
 
 # CUDA-build selectors for torch (dependency groups so they can be a default).
 # Exactly one is active per machine; use scripts/setup_torch.sh to auto-pick
@@ -38,7 +42,7 @@ cu130 = ["torch==2.11.0"]
 # Which group uv sync / uv run uses when no flag is passed. The committed
 # default is cu128; machines needing cu130 drop a local uv.toml override
 # (written automatically by scripts/setup_torch.sh).
-default-groups = ["cu128"]
+default-groups = ["cu130"]
 conflicts = [
     [
         { group = "cu128" },

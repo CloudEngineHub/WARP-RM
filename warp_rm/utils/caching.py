@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 from ..data.dataset import Episode
+from ..data.preprocess import resize_frame
 from ..data.video_reader import read_frames
 
 
@@ -68,7 +69,8 @@ def _ep_camera_video(ep: Episode, camera: str | None) -> tuple[Path, int]:
 
 
 def _ep_cache_key_stable(ep: Episode, backbone: str, feature_stride: int,
-                         camera: str | None = None) -> str:
+                         camera: str | None = None,
+                         crop_mode: str = "squash") -> str:
     """Path-stable hash: same key regardless of mount prefix.
 
     Shared caches across machines (local ~/.cache vs cloud /data) resolve
@@ -83,6 +85,11 @@ def _ep_cache_key_stable(ep: Episode, backbone: str, feature_stride: int,
     top-camera caches resolve to the same key. Different cameras live under
     ``videos/<camera>/...`` so their path tails — and thus keys — differ
     naturally; no extra camera token is mixed in.
+
+    ``crop_mode`` is mixed in ONLY when it differs from the historical
+    "squash" default, so every pre-existing cache keeps resolving to the same
+    key. Without this token, center-cropped and squashed features — genuinely
+    different pixels — would collide under one key and silently poison a run.
     """
     vpath, frame_offset = _ep_camera_video(ep, camera)
     parts = vpath.parts
@@ -94,6 +101,8 @@ def _ep_cache_key_stable(ep: Episode, backbone: str, feature_stride: int,
         rel = str(vpath)
     if frame_offset:
         rel += f"@{frame_offset}"
+    if crop_mode and crop_mode != "squash":
+        rel += f"#{crop_mode}"
     return hashlib.md5(f"{rel}:{backbone}:{feature_stride}".encode()).hexdigest()[:12]
 
 
@@ -107,7 +116,8 @@ def _ep_cache_key_legacy(ep: Episode, backbone: str, feature_stride: int,
 
 
 def _ep_cache_path(cache_dir: str, ep: Episode, backbone: str,
-                   feature_stride: int, camera: str | None = None) -> Path:
+                   feature_stride: int, camera: str | None = None,
+                   crop_mode: str = "squash") -> Path:
     """Return the cache path for an episode (optionally for a specific camera).
 
     Layout: <cache_dir>/<dataset_name>/<key>.npy. Dataset namespace prevents
@@ -130,27 +140,32 @@ def _ep_cache_path(cache_dir: str, ep: Episode, backbone: str,
     cdir = Path(cache_dir)
     vpath, _ = _ep_camera_video(ep, camera)
     dataset = _dataset_name_from_video_path(vpath)
-    stable_key = _ep_cache_key_stable(ep, backbone, feature_stride, camera)
+    stable_key = _ep_cache_key_stable(ep, backbone, feature_stride, camera, crop_mode)
     namespaced = cdir / dataset / f"{stable_key}.npy"
     if namespaced.exists():
         return namespaced
     flat_stable = cdir / f"{stable_key}.npy"
     if flat_stable.exists():
         return flat_stable
-    legacy = cdir / f"{_ep_cache_key_legacy(ep, backbone, feature_stride, camera)}.npy"
-    if legacy.exists():
-        return legacy
+    # Legacy absolute-path keys predate crop modes, so they can only ever be
+    # squash-mode caches — never resolve a non-default crop_mode to one.
+    if crop_mode == "squash":
+        legacy = cdir / f"{_ep_cache_key_legacy(ep, backbone, feature_stride, camera)}.npy"
+        if legacy.exists():
+            return legacy
     # Nothing on disk — write to the namespaced path
     return namespaced
 
 
 def _decode_episode(ep: Episode, feature_stride: int, image_size: int,
                     mean: np.ndarray, std: np.ndarray,
-                    camera: str | None = None) -> np.ndarray:
+                    camera: str | None = None,
+                    crop_mode: str = "squash") -> np.ndarray:
     """Decode + preprocess all strided frames for one episode. Returns (N, C, H, W).
 
     ``camera`` selects which camera's video + frame_offset to decode. None ==
     the episode's primary video (legacy single-camera behavior).
+    ``crop_mode`` selects the frame geometry (see `warp_rm.data.preprocess`).
     """
     video_path, frame_offset = _ep_camera_video(ep, camera)
     n_feat = (ep.n_frames + feature_stride - 1) // feature_stride
@@ -161,9 +176,7 @@ def _decode_episode(ep: Episode, feature_stride: int, image_size: int,
 
     processed = []
     for frame in frames_raw:
-        h, w = frame.shape[:2]
-        if h != image_size or w != image_size:
-            frame = cv2.resize(frame, (image_size, image_size))
+        frame = resize_frame(frame, image_size, crop_mode)
         frame = frame.astype(np.float32) / 255.0
         frame = (frame - mean) / std
         processed.append(frame)
@@ -185,6 +198,7 @@ def _precompute_one_camera(
     decode_workers: int,
     mega_batch_episodes: int,
     camera: str | None = None,
+    crop_mode: str = "squash",
 ) -> dict:
     """Extract + cache ONE camera's features. Returns
     {str(ep.path): {"cache_path", "n_frames", "n_feat"}}.
@@ -205,7 +219,7 @@ def _precompute_one_camera(
 
     ep_meta, to_extract = {}, []
     for ep in episodes:
-        cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride, camera)
+        cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride, camera, crop_mode)
         if cp.exists():
             n_feat = int(np.load(str(cp), mmap_mode="r").shape[0])
             ep_meta[str(ep.path)] = {
@@ -235,7 +249,7 @@ def _precompute_one_camera(
     def _decode_chunk(chunk_eps):
         """Parallel-decode all episodes in a chunk. Returns list of (N,C,H,W) arrays."""
         futures = {
-            pool.submit(_decode_episode, ep, feature_stride, image_size, mean, std, camera): i
+            pool.submit(_decode_episode, ep, feature_stride, image_size, mean, std, camera, crop_mode): i
             for i, ep in enumerate(chunk_eps)
         }
         decoded = [None] * len(chunk_eps)
@@ -298,7 +312,7 @@ def _precompute_one_camera(
         offset = 0
         for i, ep in enumerate(chunk_eps):
             n_feat = frame_counts[i]
-            cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride, camera)
+            cp = _ep_cache_path(cache_dir, ep, backbone, feature_stride, camera, crop_mode)
             np.save(str(cp), all_features[offset:offset + n_feat])
             offset += n_feat
             ep_meta[str(ep.path)] = {
@@ -335,6 +349,7 @@ def precompute_features(
     decode_workers: int = 16,
     mega_batch_episodes: int = 8,
     cameras: list[str] | None = None,
+    crop_mode: str = "squash",
 ) -> dict:
     """
     Pre-extract backbone features to disk; skips already-cached episodes.
@@ -373,7 +388,7 @@ def precompute_features(
         per_camera_meta.append(_precompute_one_camera(
             episodes, encoder, device, feature_stride, image_size, cache_dir,
             backbone, batch_size, mean, std, decode_workers, mega_batch_episodes,
-            camera=cam,
+            camera=cam, crop_mode=crop_mode,
         ))
 
     # Merge per-camera metas into one ep_meta carrying cache_paths.
