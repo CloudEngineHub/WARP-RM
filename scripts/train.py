@@ -937,6 +937,11 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
         "standard_stride_src": sss,   # preserved for back-compat
         "crop_mode": crop_mode,
         "use_abs_progress": ablation.use_abs_progress,
+        # AR-sampler stride calibration. Absent on pre-2026-08 checkpoints, which
+        # leaves their supervision scale unverifiable after the fact: this must
+        # track sss/fps or every label rescales by 45/sss (docs/recipe.md §4a).
+        "ar_center_stride_sec": ar_center_stride_sec,
+        "ar_half_range_sec": ar_half_range_sec,
         "min_frames": min_frames,
         "excluded_episode_index": list(exclude_episode_index),
         "feature_stride": feat_stride,

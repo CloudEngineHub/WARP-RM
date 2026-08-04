@@ -11,10 +11,15 @@ sampled from a smooth AR(1) process). The output — v̂ₜ ≈ 1 at expert pace
 ≈ 0 while stalling, < 0 while regressing — is a per-frame reward used
 downstream to filter and reweight behavior-cloning action chunks (**WARP-BC**).
 
-> This repository is the **reward-model**: training, scoring, dense
-> inference, and annotation injection. The downstream **WARP-BC** chunk
-> reweighting and simulation evaluator live in the public companion repositories
-> linked below.
+> This repository is the **reward-model**: training, scoring, dense inference, and
+> annotation injection — it stops at the injected per-frame reward column.
+> Downstream **WARP-BC** chunk reweighting lives in
+> [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi/tree/release-candidate);
+> the bottles simulator and paper scorer live in
+> [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc/tree/release-candidate).
+> Neither the weighting function nor the eval protocol is specified here — see
+> [Paper simulation](#paper-simulation) for what is and is not reproducible from
+> this repo alone.
 
 ## Install
 
@@ -60,10 +65,15 @@ expected layout). The defaults **are** the recipe:
 # Real T-shirt folding recipe: bidirectional attention, fs3/sss45, window 32, 15k steps.
 python scripts/train.py --lerobot-repo /path/to/your/lerobot/dataset
 
-# Paper simulation results repro RM checkpoint configuration (WARP-RM sss15):
-# selected checkpoint was step 14,400 of this 20k-step no-abs run.
+# Paper simulation results repro RM checkpoint configuration (WARP-RM sss15).
+# Flags below are reconstructed from the published head's stamped metadata
+# (uynitsuj/warp-rm-sim-bottles-sss15); best-composite selection landed on
+# step 14,400 of this 20k-step run. See "Paper simulation" for what is not
+# recoverable from the stamp.
 python scripts/train.py --ablation no_abs --feature-stride 1 \
     --source-standard-stride 15 --max-steps 20000 \
+    --shortest-frac 0.25 \
+    --object-counts-json /path/to/sim-bottles-mjwarp-v1/meta/object_counts.json \
     --lerobot-repo /path/to/your/lerobot/dataset
 
 # List ablation configs:
@@ -130,13 +140,30 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
   [`uynitsuj/warp-rm-sim-bottles-sss15`](https://huggingface.co/uynitsuj/warp-rm-sim-bottles-sss15).
   The frozen DINOv3 backbone is obtained separately under Meta's terms.
 - **ABC evaluator**: [`uynitsuj/abc-rabc@release-candidate`](https://github.com/uynitsuj/abc-rabc/tree/release-candidate)
-  provides the MuJoCo-Warp evaluator and deterministic `score_bottles.py`.
-- **OpenPI repository**: [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi/tree/release-candidate)
-  provides optional pi0 + RABC policy support. Its upstream Pi0 terms apply
-  to the corresponding published policy parameters.
+  provides the MuJoCo-Warp evaluator and the deterministic `score_bottles.py`.
+  Pin: `9a9fbb5bbf109b726b4130b18cd9826a4e262d45`
+  ("Public WARP-RM simulator and paper scorer release", 2026-07-14).
+- **OpenPI repository**: [`uynitsuj/openpi@release-candidate`](https://github.com/uynitsuj/openpi/tree/release-candidate)
+  provides pi0 policy training plus the WARP-BC chunk filtering/reweighting that
+  consumes `warp_rm_signed_magnitude`. Pin:
+  `204eb92dd2af37c4d1189b587d5fbff978383930`
+  ("Add public WARP-RM paper simulation policy serving", 2026-07-14).
+  Its upstream Pi0 terms apply to the corresponding published policy parameters.
 - **Policy checkpoints and canonical traces**:
   [`uynitsuj/paper-sim-policy-checkpoints`](https://huggingface.co/uynitsuj/paper-sim-policy-checkpoints)
   and [`uynitsuj/paper-sim-n128-traces`](https://huggingface.co/datasets/uynitsuj/paper-sim-n128-traces).
+
+> [!NOTE]
+> `release-candidate` is a **branch, not a tag** — it can move. The SHAs above are
+> the commits these instructions were verified against; check them out explicitly
+> if you need the numbers to line up:
+>
+> ```bash
+> git clone https://github.com/uynitsuj/abc-rabc.git
+> git -C abc-rabc checkout 9a9fbb5bbf109b726b4130b18cd9826a4e262d45
+> git clone https://github.com/uynitsuj/openpi.git
+> git -C openpi   checkout 204eb92dd2af37c4d1189b587d5fbff978383930
+> ```
 
 For the deterministic n=128 audit, download the public trace artifact and run
 the public ABC scorer:
@@ -144,8 +171,8 @@ the public ABC scorer:
 ```bash
 hf download uynitsuj/paper-sim-n128-traces --repo-type dataset \
   --local-dir ../traces/paper-sim-n128
-git clone --branch release-candidate https://github.com/uynitsuj/abc-rabc.git
-cd abc-rabc
+git clone https://github.com/uynitsuj/abc-rabc.git && cd abc-rabc
+git checkout 9a9fbb5bbf109b726b4130b18cd9826a4e262d45
 python score_bottles.py --trace-dir ../traces/paper-sim-n128 --self-test
 ```
 
@@ -153,6 +180,69 @@ The self-test verifies every published table value from the canonical traces.
 It uses only the published data, checkpoints, traces, and source repositories;
 fresh rollouts are evaluated against tolerances rather than expected
 to be trajectory-identical.
+
+### Scope: what this repo does and does not get you
+
+This audit is worth stating plainly, because the two are easy to conflate.
+
+**Reproducible from this repo:** training a WARP-RM on the sim dataset, scoring
+it, and injecting the per-frame reward columns. Plus *verifying* the published
+n=128 table via the trace self-test above — which checks published traces with a
+published scorer, and is not the same as regenerating them.
+
+**Not specified here** — you need the companion repos, and in places their source
+rather than their docs:
+
+| piece | status |
+|---|---|
+| chunk reweighting function | **documented** — `clip(mean(velocity over action_horizon), 0, 1)`; see [`reproduce_sim.md`](docs/reproduce_sim.md#the-formula) |
+| rollout + success criterion + metrics | **documented** in `abc-rabc`; see [`reproduce_sim.md`](docs/reproduce_sim.md#4-rollout-and-scoring--reproducible) |
+| pi0 **training** | **not reproducible** — the two paper-sim configs are inference-only and point at unpublished pre-weighted datasets |
+| column naming | `warp_rm_signed_magnitude` vs openpi's `rorm_velocity`/`rorm_weight` — **no alias**; rename or use `inject_rm_column.py --column rorm_weight` |
+
+#### Config recovered from the published checkpoint
+
+The published head stamps its own configuration, so most of the recipe is
+recoverable rather than guessed. Read from
+`uynitsuj/warp-rm-sim-bottles-sss15/warp_rm_sss15.pt`
+(sha256 verified against its `MANIFEST.json`):
+
+| stamped | value |
+|---|---|
+| `ablation` / `sampler` / `attention` | `no_abs` / `ar` / `bidirectional` |
+| `feature_stride` / `standard_stride_src` | `1` / `15` → `std_feat_steps = 15` (exact) |
+| `cameras` / `fusion` | `['top_camera-images-rgb']` (the default) / `concat` |
+| `rel_bin_min` / `rel_bin_max` | `-3.0` / `3.0` |
+| `label_mode` / `progress_shape` | `relative` / `uniform` |
+| `step` | **14400** |
+| `val_vel_spearman` / `val_cum_sign` / `val_spearman` | 0.8949 / 0.9908 / 0.9982 |
+| composite | **3.8515** |
+| `branch_tag` | `wr_A_rm_perobj_s25_mjwarp_sss15_20k` |
+
+Two things follow. **Step 14,400 is not a manual pick** — the trainer saves
+best-composite only, and that is simply where the best composite landed; your run
+may select a different step. And `branch_tag`'s `perobj_s25` indicates the
+**per-object stratified** shortest filter at frac 0.25, which needs
+`--object-counts-json`; `meta/object_counts.json` **is** published in the dataset,
+so this is reproducible once passed explicitly (added to the command above).
+
+**What the stamp does *not* record:** `--ar-center-stride-sec` /
+`--ar-half-range-sec` (not a free parameter — must track `sss/fps`; on this dataset
+the ambiguity is low-impact, quantified in
+[`docs/reproduce_sim.md`](docs/reproduce_sim.md)), `--batch-size` / `--lr`, and the
+episode count surviving the filter. Checkpoints written after 2026-08 stamp the
+sampler calibration.
+
+> [!WARNING]
+> **The published sim dataset is 640x480, not square** (verified on the bitstream),
+> so training on it with default flags squashes frames 1.33x — pass
+> `--crop-mode center`. Whether the *released head* saw squashed or pre-cropped
+> frames is unrecorded (no `crop_mode` stamp) and the published dataset may not be
+> the training corpus; see [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
+
+**Full audit — including the WARP-BC weight formula, the eval success criterion,
+and why pi0 training is *not* reproducible — is in
+[`docs/reproduce_sim.md`](docs/reproduce_sim.md).**
 
 ## Repository layout
 
