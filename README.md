@@ -13,13 +13,12 @@ downstream to filter and reweight behavior-cloning action chunks (**WARP-BC**).
 
 > This repository is the **reward-model**: training, scoring, dense inference, and
 > annotation injection — it stops at the injected per-frame reward column.
-> Downstream **WARP-BC** chunk reweighting lives in
-> [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi/tree/release-candidate);
+> Downstream **WARP-BC** chunk filtering and pi0 training live in
+> [`uynitsuj/openpi@paper-repro`](https://github.com/uynitsuj/openpi/tree/paper-repro);
 > the bottles simulator and paper scorer live in
 > [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc/tree/release-candidate).
-> Neither the weighting function nor the eval protocol is specified here — see
-> [Paper simulation](#paper-simulation) for what is and is not reproducible from
-> this repo alone.
+> The full four-step recipe — WARP-RM → injected column → pi0 → sim eval — is in
+> [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
 
 ## Install
 
@@ -31,6 +30,14 @@ uv sync --extra wandb         # optional: Weights & Biases logging
 
 Requires Python ≥ 3.10 and a CUDA GPU. Torch is pinned per CUDA runtime
 (`cu128` default; run `scripts/setup_torch.sh` to auto-pick `cu128`/`cu130`).
+
+The frozen backbone is pulled from the **gated** repo
+`facebook/dinov3-vitb16-pretrain-lvd1689m`, so accept Meta's terms on that model
+page and authenticate before the first run (or prime your HF cache):
+
+```bash
+hf auth login
+```
 
 ## Quickstart — train a WARP-RM on a LeRobot dataset
 
@@ -143,9 +150,14 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
   provides the MuJoCo-Warp evaluator and the deterministic `score_bottles.py`.
   Pin: `9a9fbb5bbf109b726b4130b18cd9826a4e262d45`
   ("Public WARP-RM simulator and paper scorer release", 2026-07-14).
-- **OpenPI repository**: [`uynitsuj/openpi@release-candidate`](https://github.com/uynitsuj/openpi/tree/release-candidate)
-  provides pi0 policy training plus the WARP-BC chunk filtering/reweighting that
-  consumes `warp_rm_signed_magnitude`. Pin:
+- **OpenPI repository** — two branches, two jobs.
+  [`uynitsuj/openpi@paper-repro`](https://github.com/uynitsuj/openpi/tree/paper-repro)
+  provides pi0 **training**: `scripts/train.py`, the WARP-BC chunk filter that
+  consumes `warp_rm_signed_magnitude`, and the two paper-arm configs
+  (`pi0_put_bottles_mjwarp_rabc_sss15`, `pi0_put_bottles_mjwarp_no_rabc`).
+  Pin: `91f99d6` <!-- TODO: verify after pushing paper-repro -->.
+  [`uynitsuj/openpi@release-candidate`](https://github.com/uynitsuj/openpi/tree/release-candidate)
+  **serves** the released policies. Pin:
   `204eb92dd2af37c4d1189b587d5fbff978383930`
   ("Add public WARP-RM paper simulation policy serving", 2026-07-14).
   Its upstream Pi0 terms apply to the corresponding published policy parameters.
@@ -154,15 +166,19 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
   and [`uynitsuj/paper-sim-n128-traces`](https://huggingface.co/datasets/uynitsuj/paper-sim-n128-traces).
 
 > [!NOTE]
-> `release-candidate` is a **branch, not a tag** — it can move. The SHAs above are
-> the commits these instructions were verified against; check them out explicitly
-> if you need the numbers to line up:
+> `release-candidate` and `paper-repro` are **branches, not tags** — they can move.
+> The SHAs above are the commits these instructions were verified against; check
+> them out explicitly if you need the numbers to line up:
 >
 > ```bash
 > git clone https://github.com/uynitsuj/abc-rabc.git
 > git -C abc-rabc checkout 9a9fbb5bbf109b726b4130b18cd9826a4e262d45
-> git clone https://github.com/uynitsuj/openpi.git
-> git -C openpi   checkout 204eb92dd2af37c4d1189b587d5fbff978383930
+> # serving
+> git clone https://github.com/uynitsuj/openpi.git openpi-serve
+> git -C openpi-serve checkout 204eb92dd2af37c4d1189b587d5fbff978383930
+> # training
+> git clone https://github.com/uynitsuj/openpi.git openpi-train
+> git -C openpi-train checkout 91f99d6   # TODO: verify after pushing paper-repro
 > ```
 
 For the deterministic n=128 audit, download the public trace artifact and run
@@ -183,22 +199,20 @@ to be trajectory-identical.
 
 ### Scope: what this repo does and does not get you
 
-This audit is worth stating plainly, because the two are easy to conflate.
+**From this repo alone:** training a WARP-RM on the sim dataset, scoring it, and
+injecting the per-frame reward columns. Plus *verifying* the published n=128 table
+via the trace self-test above — which checks published traces with a published
+scorer, and is not the same as regenerating them.
 
-**Reproducible from this repo:** training a WARP-RM on the sim dataset, scoring
-it, and injecting the per-frame reward columns. Plus *verifying* the published
-n=128 table via the trace self-test above — which checks published traces with a
-published scorer, and is not the same as regenerating them.
+**From the companion repos** — every step is runnable, but the details live there:
 
-**Not specified here** — you need the companion repos, and in places their source
-rather than their docs:
-
-| piece | status |
+| piece | where |
 |---|---|
-| chunk reweighting function | **documented** — `clip(mean(velocity over action_horizon), 0, 1)`; see [`reproduce_sim.md`](docs/reproduce_sim.md#the-formula) |
-| rollout + success criterion + metrics | **documented** in `abc-rabc`; see [`reproduce_sim.md`](docs/reproduce_sim.md#4-rollout-and-scoring--reproducible) |
-| pi0 **training** | **not reproducible** — the two paper-sim configs are inference-only and point at unpublished pre-weighted datasets |
-| column naming | `warp_rm_signed_magnitude` vs openpi's `rorm_velocity`/`rorm_weight` — **no alias**; rename or use `inject_rm_column.py --column rorm_weight` |
+| WARP-BC chunk filter | **binary gate**: keep iff chunk-final `velocity > 1.0` (~31.5% of chunks), kept weight 1.0 — see [`reproduce_sim.md`](docs/reproduce_sim.md#the-gate). Not the soft mean-velocity form that `ComputeRABCWeights` applies with its defaults. |
+| weighted dataset | build it yourself: `sim-bottles-mjwarp-v1` + the injected column, no extra download — see [`reproduce_sim.md`](docs/reproduce_sim.md#build-the-weighted-dataset) |
+| pi0 **training** | `openpi@paper-repro`; both arm configs are committed — see [`reproduce_sim.md`](docs/reproduce_sim.md#train-the-two-arms) |
+| rollout + success criterion + metrics | `abc-rabc`; the n=128 seed set and trace layout are in [`reproduce_sim.md`](docs/reproduce_sim.md#4-rollout-and-scoring) |
+| column naming | `paper-repro` resolves `warp_rm_signed_magnitude` first — **no rename needed**. Only `release-candidate` lacks that resolution (it reads `rorm_velocity`/`rorm_weight`). |
 
 #### Config recovered from the published checkpoint
 
@@ -240,8 +254,8 @@ sampler calibration.
 > frames is unrecorded (no `crop_mode` stamp) and the published dataset may not be
 > the training corpus; see [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
 
-**Full audit — including the WARP-BC weight formula, the eval success criterion,
-and why pi0 training is *not* reproducible — is in
+**Full recipe — the WARP-BC gate, the weighted-dataset build, both pi0 arm configs,
+the n=128 rollout protocol, and the eval success criterion — is in
 [`docs/reproduce_sim.md`](docs/reproduce_sim.md).**
 
 ## Repository layout
