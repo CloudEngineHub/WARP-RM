@@ -59,7 +59,7 @@ number is checkable. Only the curation step is closed.
 |---|---|---|---|
 | [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `public/table1-repro` | `9c8e7b75483edd5c2dd5f403109d3b0f16549d60` | **trains** the six arms |
 | [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `release-candidate` | `204eb92dd2af37c4d1189b587d5fbff978383930` | **serves** a checkpoint for rollout |
-| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `public/table1-eval` | `1004945d745b41de044d3e705757be85d6c14a09` | **batched** rollout + scoring |
+| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `public/table1-eval` | `59db543d` | **batched** rollout + scoring |
 
 ## 1. Train the reward model
 

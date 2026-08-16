@@ -141,6 +141,16 @@ bottles/scene** (t(511)=9.09, p=1.0e-19) and **+60/hr** throughput
 on everything (3.770 vs 3.885), as expected — the gain comes from *which*
 chunks are kept, not from keeping fewer.
 
+<video src="https://github.com/uynitsuj/WARP-RM/raw/main/docs/assets/rollout_s20260906_vanilla_vs_warp.mp4" controls muted loop width="100%"></video>
+
+[▶ rollout_s20260906_vanilla_vs_warp.mp4](docs/assets/rollout_s20260906_vanilla_vs_warp.mp4)
+— *one* paired scene (seed 20260906) from the 512 above: both arms start from
+an identical layout, vanilla BC places 2 bottles at 141/hr, WARP-BC clears all
+6 at 598/hr. Chosen to show the failure mode, so it is a tail case rather than
+a typical one — the table's aggregate margin is +0.65 bottles/scene. Playback
+is ~2x real time. Regenerate any pair with `render_rollout_pair.py` in
+[`abc-rabc@public/table1-eval`](https://github.com/uynitsuj/abc-rabc/tree/public/table1-eval).
+
 Full protocol, per-arm thresholds and the retention-matching procedure:
 [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
 
@@ -159,7 +169,7 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
   The frozen DINOv3 backbone is obtained separately under Meta's terms.
 - **ABC evaluator**: [`uynitsuj/abc-rabc@public/table1-eval`](https://github.com/uynitsuj/abc-rabc/tree/public/table1-eval)
   provides the **batched** MuJoCo-Warp evaluator and the deterministic
-  `score_bottles.py`. Pin: `1004945d745b41de044d3e705757be85d6c14a09`.
+  `score_bottles.py`. Pin: `59db543d`.
   (`release-candidate`, pin `9a9fbb5bbf109b726b4130b18cd9826a4e262d45`, carries
   only the serial `eval_policy.py` and cannot run the batched rollout.)
 - **OpenPI repository** — two branches, two jobs.
@@ -187,7 +197,7 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
 >
 > ```bash
 > git clone https://github.com/uynitsuj/abc-rabc.git
-> git -C abc-rabc checkout 1004945d745b41de044d3e705757be85d6c14a09
+> git -C abc-rabc checkout 59db543d
 > # serving
 > git clone https://github.com/uynitsuj/openpi.git openpi-serve
 > git -C openpi-serve checkout 204eb92dd2af37c4d1189b587d5fbff978383930
