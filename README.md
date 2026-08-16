@@ -14,9 +14,9 @@ downstream to filter and reweight behavior-cloning action chunks (**WARP-BC**).
 > This repository is the **reward-model**: training, scoring, dense inference, and
 > annotation injection — it stops at the injected per-frame reward column.
 > Downstream **WARP-BC** chunk filtering and pi0 training live in
-> [`uynitsuj/openpi@paper-repro`](https://github.com/uynitsuj/openpi/tree/paper-repro);
+> [`uynitsuj/openpi@public/table1-repro`](https://github.com/uynitsuj/openpi/tree/public/table1-repro);
 > the bottles simulator and paper scorer live in
-> [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc/tree/release-candidate).
+> [`uynitsuj/abc-rabc@public/table1-eval`](https://github.com/uynitsuj/abc-rabc/tree/public/table1-eval).
 > The full four-step recipe — WARP-RM → injected column → pi0 → sim eval — is in
 > [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
 
@@ -112,6 +112,40 @@ See [`docs/webui.md`](docs/webui.md) for the endpoint reference and cache layout
 
 ## Paper simulation
 
+Simulated bottle-in-bin, **512 paired scenes x 6 bottles, 60 s horizon**. Every
+curation arm holds 31.5% of the data; arms share demonstrations, policy
+architecture and train-step budget, and differ *only* in which action chunks
+they train on.
+
+| Method | Data kept | Bottles/scene | Thrpt (/hr) | All 6 |
+|---|---|---|---|---|
+| Vanilla BC | 100% | 3.885 | 237 | 9.4% |
+| Random | 31.5% | 3.770 | 230 | 10.9% |
+| ReWiND | 31.5% | 3.781 | 231 | 9.4% |
+| SARM (oracle) | 31.5% | 4.191 | 265 | 20.5% |
+| WARP-BC (IID) | 31.5% | 4.285 | 269 | 18.9% |
+| SCIZOR | 31.5% | 4.299 | 270 | 19.1% |
+| DemInf | 31.5% | 4.332 | 271 | 18.8% |
+| **WARP-BC** | 31.5% | **4.533** | **290** | **25.0%** |
+
+SARM uses *oracle* stage boundaries from simulator state, so it is an
+upper-bound reference rather than a deployable method. **WARP-BC (IID)** is the
+sampler ablation: the AR(1) log-speed process swapped for an i.i.d. draw with
+the same marginal, leaving only temporal correlation different. It falls to
+4.285 — level with SCIZOR and DemInf rather than above them, which is where the
+AR(1) warping earns its margin.
+
+Paired contrasts at n=512: WARP-BC over random selection is **+0.764
+bottles/scene** (t(511)=9.09, p=1.0e-19) and **+60/hr** throughput
+(p=1.6e-23). Training on a random 31.5% performs slightly *worse* than training
+on everything (3.770 vs 3.885), as expected — the gain comes from *which*
+chunks are kept, not from keeping fewer.
+
+Full protocol, per-arm thresholds and the retention-matching procedure:
+[`docs/reproduce_sim.md`](docs/reproduce_sim.md).
+
+### Artifacts
+
 The paper's public sim reproduction uses these public artifacts beyond this
 repo (the RM itself trains and scores any compatible LeRobot dataset):
 
@@ -123,39 +157,43 @@ repo (the RM itself trains and scores any compatible LeRobot dataset):
 - **Paper RM head**:
   [`uynitsuj/warp-rm-sim-bottles-sss15`](https://huggingface.co/uynitsuj/warp-rm-sim-bottles-sss15).
   The frozen DINOv3 backbone is obtained separately under Meta's terms.
-- **ABC evaluator**: [`uynitsuj/abc-rabc@release-candidate`](https://github.com/uynitsuj/abc-rabc/tree/release-candidate)
-  provides the MuJoCo-Warp evaluator and the deterministic `score_bottles.py`.
-  Pin: `9a9fbb5bbf109b726b4130b18cd9826a4e262d45`
-  ("Public WARP-RM simulator and paper scorer release", 2026-07-14).
+- **ABC evaluator**: [`uynitsuj/abc-rabc@public/table1-eval`](https://github.com/uynitsuj/abc-rabc/tree/public/table1-eval)
+  provides the **batched** MuJoCo-Warp evaluator and the deterministic
+  `score_bottles.py`. Pin: `1004945d745b41de044d3e705757be85d6c14a09`.
+  (`release-candidate`, pin `9a9fbb5bbf109b726b4130b18cd9826a4e262d45`, carries
+  only the serial `eval_policy.py` and cannot run the batched rollout.)
 - **OpenPI repository** — two branches, two jobs.
-  [`uynitsuj/openpi@paper-repro`](https://github.com/uynitsuj/openpi/tree/paper-repro)
+  [`uynitsuj/openpi@public/table1-repro`](https://github.com/uynitsuj/openpi/tree/public/table1-repro)
   provides pi0 **training**: `scripts/train.py`, the WARP-BC chunk filter that
-  consumes `warp_rm_signed_magnitude`, and the two paper-arm configs
-  (`pi0_put_bottles_mjwarp_rabc_sss15`, `pi0_put_bottles_mjwarp_no_rabc`).
-  Pin: `91f99d6` <!-- TODO: verify after pushing paper-repro -->.
+  consumes `warp_rm_signed_magnitude`, and the six reproducible arm configs
+  (`no_rabc`, `rabc_sss15`, `sweep_iid`, `sarm`, `scizor_matched`, `random`).
+  Pin: `9c8e7b75483edd5c2dd5f403109d3b0f16549d60`.
   [`uynitsuj/openpi@release-candidate`](https://github.com/uynitsuj/openpi/tree/release-candidate)
   **serves** the released policies. Pin:
   `204eb92dd2af37c4d1189b587d5fbff978383930`
   ("Add public WARP-RM paper simulation policy serving", 2026-07-14).
   Its upstream Pi0 terms apply to the corresponding published policy parameters.
 - **Policy checkpoints and canonical traces**:
-  [`uynitsuj/paper-sim-policy-checkpoints`](https://huggingface.co/uynitsuj/paper-sim-policy-checkpoints)
-  and [`uynitsuj/paper-sim-n128-traces`](https://huggingface.co/datasets/uynitsuj/paper-sim-n128-traces).
+  [`uynitsuj/paper-sim-policy-checkpoints`](https://huggingface.co/uynitsuj/paper-sim-policy-checkpoints),
+  [`uynitsuj/paper-sim-n512-traces`](https://huggingface.co/datasets/uynitsuj/paper-sim-n512-traces)
+  (the n=512 set the table above reports, vanilla and WARP-BC) and
+  [`uynitsuj/paper-sim-n128-traces`](https://huggingface.co/datasets/uynitsuj/paper-sim-n128-traces)
+  (the smaller deterministic replay set).
 
 > [!NOTE]
-> `release-candidate` and `paper-repro` are **branches, not tags** — they can move.
+> These are **branches, not tags** — they can move.
 > The SHAs above are the commits these instructions were verified against; check
 > them out explicitly if you need the numbers to line up:
 >
 > ```bash
 > git clone https://github.com/uynitsuj/abc-rabc.git
-> git -C abc-rabc checkout 9a9fbb5bbf109b726b4130b18cd9826a4e262d45
+> git -C abc-rabc checkout 1004945d745b41de044d3e705757be85d6c14a09
 > # serving
 > git clone https://github.com/uynitsuj/openpi.git openpi-serve
 > git -C openpi-serve checkout 204eb92dd2af37c4d1189b587d5fbff978383930
 > # training
 > git clone https://github.com/uynitsuj/openpi.git openpi-train
-> git -C openpi-train checkout 91f99d6   # TODO: verify after pushing paper-repro
+> git -C openpi-train checkout 9c8e7b75483edd5c2dd5f403109d3b0f16549d60
 > ```
 
 For the deterministic n=128 audit, download the public trace artifact and run
@@ -165,7 +203,7 @@ the public ABC scorer:
 hf download uynitsuj/paper-sim-n128-traces --repo-type dataset \
   --local-dir ../traces/paper-sim-n128
 git clone https://github.com/uynitsuj/abc-rabc.git && cd abc-rabc
-git checkout 9a9fbb5bbf109b726b4130b18cd9826a4e262d45
+git checkout 1004945d745b41de044d3e705757be85d6c14a09
 python score_bottles.py --trace-dir ../traces/paper-sim-n128 --self-test
 ```
 
@@ -187,9 +225,9 @@ scorer, and is not the same as regenerating them.
 |---|---|
 | WARP-BC chunk filter | **binary gate**: keep iff chunk-final `velocity > 1.0` (~31.5% of chunks), kept weight 1.0 — see [`reproduce_sim.md`](docs/reproduce_sim.md#the-gate). Not the soft mean-velocity form that `ComputeRABCWeights` applies with its defaults. |
 | weighted dataset | build it yourself: `sim-bottles-mjwarp-v1` + the injected column, no extra download — see [`reproduce_sim.md`](docs/reproduce_sim.md#build-the-weighted-dataset) |
-| pi0 **training** | `openpi@paper-repro`; both arm configs are committed — see [`reproduce_sim.md`](docs/reproduce_sim.md#train-the-two-arms) |
+| pi0 **training** | `openpi@public/table1-repro`; six arm configs are committed — see [`reproduce_sim.md`](docs/reproduce_sim.md#train-the-two-arms) |
 | rollout + success criterion + metrics | `abc-rabc`; the n=128 seed set and trace layout are in [`reproduce_sim.md`](docs/reproduce_sim.md#4-rollout-and-scoring) |
-| column naming | `paper-repro` resolves `warp_rm_signed_magnitude` first — **no rename needed**. Only `release-candidate` lacks that resolution (it reads `rorm_velocity`/`rorm_weight`). |
+| column naming | `public/table1-repro` resolves `warp_rm_signed_magnitude` first — **no rename needed**. Only `release-candidate` lacks that resolution (it reads `rorm_velocity`/`rorm_weight`). |
 
 #### Config recovered from the published checkpoint
 
