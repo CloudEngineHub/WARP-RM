@@ -46,7 +46,9 @@ from warp_rm.data.dataset import (
     PrecomputedFeatureDataset, CachedVideoLoader,
 )
 from warp_rm.data.lerobot_dataset import discover_lerobot_episodes
-from warp_rm.data.samplers import ARSampler, ContinuousWarpSampler, EvalSampler, TrueARSampler
+from warp_rm.data.samplers import (
+    ARSampler, ContinuousWarpSampler, EvalSampler, TrueARSampler, derive_ar_budget,
+)
 from warp_rm.data.labelers import RelativeCumulativeLabeler, DeltaVelocityLabeler
 from warp_rm.data.preprocess import CROP_MODES
 
@@ -261,6 +263,15 @@ class Args:
     labels exceed the support and clamp — e.g. sss15 on 60Hz data reaches
     |label| ~5 on the longest episodes (2.96% of tokens clamped)."""
 
+    auto_bin_range: bool = True
+    """Size the C51 relative-head support to the label distribution the sampler
+    actually produces (p99.5 x 1.15, rounded up to 0.05) instead of a fixed
+    +-3. This is the third arm of the same coupling: SSS is the one tunable,
+    the path budget derives from it (--ar-center-stride-sec), and the support
+    derives from the labels that result. Nothing to keep in sync by hand, and
+    no silent clamping when SSS moves. The saturation audit prints either way.
+    An explicit --rel-bin-max still wins."""
+
     feature_stride: Optional[int] = None
     """Override FEATURE_STRIDE (default 3 — every 3rd source frame produces
     one DINOv3 feature). Lower = denser features, bigger feature cache,
@@ -292,13 +303,32 @@ class Args:
     value of the AR temporal correlation); reversal sampling and path budget
     unchanged. Only affects training-time window sampling; not inference."""
 
-    ar_center_stride_sec: float = 1.5
+    ar_center_stride_sec: float = -1.0
     """(ar only) Centre of per-step stride distribution, in seconds. The
     sampler samples a path budget in [center - half_range, center + half_range]
-    seconds-per-step, then an AR(1) speed process modulates individual gaps."""
+    seconds-per-step, then an AR(1) speed process modulates individual gaps.
 
-    ar_half_range_sec: float = 1.0
-    """(ar only) Half-width of the uniform path-budget band around center."""
+    -1 = DERIVED from --source-standard-stride (default since 2026-08-15).
+    SSS sets the label denominator and this sets how far a window actually
+    travels; they are two halves of one calibration, so the code now couples
+    them instead of asking the caller to keep two numbers in sync:
+
+        label(window) = path_src / ((N-1) * SSS)
+        path_src      = center_stride_sec * fps * (N-1)
+        => centred at 1.0  <=>  center_stride_sec = SSS / fps
+
+    The fps cancels — the derived budget is exactly one standard-pace window,
+    standard_feat_steps * (N-1) feature frames — so this is correct whatever
+    the dataset's true frame rate. At the default SSS=45 it derives 1.5 s,
+    which is the value that was hardcoded here before, so defaults are
+    unchanged. At SSS=15 it derives 0.5 s; leaving 1.5 s there rescaled every
+    label by 45/15 and clipped the fast tail. Pass a value to override."""
+
+    ar_half_range_sec: float = -1.0
+    """(ar only) Half-width of the uniform path-budget band around center.
+    -1 = DERIVED as 2/3 * centre, the ratio these defaults have always had
+    (1.0 / 1.5), so the RELATIVE speed band is invariant to SSS. Pass a value
+    to override."""
 
     ar_alpha: float = 0.5
     """(ar only) AR(1) autocorrelation coefficient for log-speed process.
@@ -387,6 +417,7 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    source_standard_stride_override: Optional[int] = None,
                    feature_stride_override: Optional[int] = None,
                    rel_bin_max_override: Optional[float] = None,
+                   auto_bin_range: bool = True,
                    progress_shape: str = "uniform",
                    balance_repos: bool = False,
                    weight_by_length: bool = False,
@@ -412,8 +443,8 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    label_anchor_frames: int = 15,
                    sampler_type: str = "continuous",
                    crop_mode: str = "squash",
-                   ar_center_stride_sec: float = 1.5,
-                   ar_half_range_sec: float = 1.0,
+                   ar_center_stride_sec: float = -1.0,
+                   ar_half_range_sec: float = -1.0,
                    ar_alpha: float = 0.5,
                    ar_lambda_reversals: float = 1.0,
                    ar_p_full_flip: float = 0.5,
@@ -629,6 +660,9 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
         if max_src_stride is not None else STRIDE_OPTIONS_SRC
     )
     max_label = max(stride_options) / sss
+    # Couple the sampler's path budget to SSS (docs/recipe.md 4a).
+    ar_center_stride_sec, ar_half_range_sec, _derived_centre, _derived_half = \
+        derive_ar_budget(sss, ar_center_stride_sec, ar_half_range_sec)
     if sampler_type in ("ar", "iid"):
         iid_speed = (sampler_type == "iid")
         print(f"Sampler: {sampler_type} | window_size={window_size} | "
@@ -674,6 +708,27 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
             p_edge_anchor=p_edge_anchor,
             smooth_flip=smooth_flip,
         )
+
+    if hasattr(sampler, "path_min_feat"):
+        # The path budget is a REQUEST in feature frames that the sampler clips
+        # to the episode. A band sitting above the episode length truncates the
+        # AR(1) speed process and biases labels low. Print it every run so that
+        # can never again be found late.
+        _lens = np.asarray(
+            [((e.n_frames + feat_stride - 1) // feat_stride) for e in train_episodes],
+            dtype=np.float64)
+        _p50 = float(np.median(_lens)) if _lens.size else 0.0
+        _p90 = float(np.quantile(_lens, 0.9)) if _lens.size else 0.0
+        _lo, _hi = float(sampler.path_min_feat), float(sampler.path_max_feat)
+        _over = 0.0 if _hi <= _lo else min(1.0, max(0.0, (_hi - max(_lo, _p50)) / (_hi - _lo)))
+        _src = (f"derived from sss={sss}" if _derived_centre else "explicit")
+        _srch = ("derived" if _derived_half else "explicit")
+        print(f"[path-budget] centre={ar_center_stride_sec:.4f}s ({_src}) "
+              f"half={ar_half_range_sec:.4f}s ({_srch}) "
+              f"-> band [{_lo:.0f}, {_hi:.0f}] feat frames "
+              f"| standard window = {standard_feat_steps * (window_size - 1)} "
+              f"| train n_feat p50={_p50:.0f} p90={_p90:.0f} "
+              f"| {100.0 * _over:.0f}% of the band exceeds p50 (clipped to the episode)")
 
     if labeler_mode == "delta":
         labeler = DeltaVelocityLabeler(
@@ -805,11 +860,42 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
     # Delta-mode widens the C51 relative-head bin range. Per-step labels can
     # reach ±(max_src_stride / label_anchor_frames); with max_src_stride=90
     # and anchor=15 that's ±6. Use ±6 as the default delta-mode range.
+    auto_bin_max = None
+    if sampler is not None and labeler is not None:
+        import random as _rnd
+        _state = _rnd.getstate()
+        _rnd.seed(0xB1A5)
+        _probe = train_episodes[: min(64, len(train_episodes))]
+        _labels = []
+        for _ep in _probe:
+            _nf = (_ep.n_frames + feat_stride - 1) // feat_stride
+            for _ in range(32):
+                _fi = sampler.sample_indices(_nf)
+                _labels.append(np.abs(np.asarray(
+                    labeler.generate(_fi, _ep.progress_per_frame, _ep.n_frames),
+                    dtype=np.float64)))
+        _rnd.setstate(_state)
+        _a = np.concatenate(_labels)
+        _p995 = float(np.quantile(_a, 0.995))
+        _fit = float(np.ceil(_p995 * 1.15 * 20) / 20)  # +15% margin, round to 0.05
+        print(f"[label-audit] |label|: p50={np.quantile(_a, 0.5):.3f} "
+              f"p90={np.quantile(_a, 0.9):.3f} p99={np.quantile(_a, 0.99):.3f} "
+              f"p99.5={_p995:.3f} max={_a.max():.3f}  (n={_a.size} over {len(_probe)} eps)")
+        print(f"[label-audit] clamped by the +-3.0 support: "
+              f"{100.0 * (_a > 3.0).mean():.2f}% of labels "
+              f"(a support of +-{_fit:.2f} would fit)")
+        if auto_bin_range:
+            auto_bin_max = _fit
+
     if labeler_mode == "delta":
         rel_bin_min_use, rel_bin_max_use = -6.0, 6.0
         print(f"[model] delta mode: rel_bin range = [{rel_bin_min_use}, {rel_bin_max_use}]")
     else:
         rel_bin_min_use, rel_bin_max_use = -3.0, 3.0
+    if auto_bin_max is not None:
+        rel_bin_min_use, rel_bin_max_use = -auto_bin_max, auto_bin_max
+        print(f"[label-audit] --auto-bin-range: support resized to "
+              f"[{rel_bin_min_use:.2f}, {rel_bin_max_use:.2f}]")
     if rel_bin_max_override is not None:
         rel_bin_min_use, rel_bin_max_use = -rel_bin_max_override, rel_bin_max_override
         print(f"[model] rel_bin override: range = [{rel_bin_min_use}, {rel_bin_max_use}]")
@@ -1052,6 +1138,7 @@ def main():
         source_standard_stride_override=args.source_standard_stride,
         feature_stride_override=args.feature_stride,
         rel_bin_max_override=args.rel_bin_max,
+        auto_bin_range=args.auto_bin_range,
         sampler_type=args.sampler,
         crop_mode=args.crop_mode,
         ar_center_stride_sec=args.ar_center_stride_sec,
