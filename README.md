@@ -141,9 +141,13 @@ bottles/scene** (t(511)=9.09, p=1.0e-19) and **+60/hr** throughput
 on everything (3.770 vs 3.885), as expected — the gain comes from *which*
 chunks are kept, not from keeping fewer.
 
-<video src="https://github.com/uynitsuj/WARP-RM/raw/main/docs/assets/rollout_s20260906_vanilla_vs_warp.mp4" controls muted loop width="100%"></video>
+<p align="center">
+  <img src="docs/assets/rollout_s20260906_vanilla_vs_warp.gif"
+       alt="Paired rollout, seed 20260906: vanilla BC places 2 bottles, WARP-BC clears all 6"
+       width="100%">
+</p>
 
-[▶ rollout_s20260906_vanilla_vs_warp.mp4](docs/assets/rollout_s20260906_vanilla_vs_warp.mp4)
+[Full-quality mp4](docs/assets/rollout_s20260906_vanilla_vs_warp.mp4)
 — *one* paired scene (seed 20260906) from the 512 above: both arms start from
 an identical layout, vanilla BC places 2 bottles at 141/hr, WARP-BC clears all
 6 at 598/hr. Chosen to show the failure mode, so it is a tail case rather than
