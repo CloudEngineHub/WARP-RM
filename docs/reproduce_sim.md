@@ -1,281 +1,234 @@
 # Reproducing the simulated bottles-in-bin results
 
-Audit of what the public artifacts let you reproduce, end to end. Read against the
-pinned companion commits:
+This document reproduces **Table I** of the CoRL rebuttal: simulated
+bottle-in-bin, 512 paired scenes x 6 bottles, 60 s horizon, every curation arm
+holding 31.5% of the data.
+
+| Method | Data kept | Bottles/scene | Thrpt (/hr) | All 6 |
+|---|---|---|---|---|
+| Vanilla BC | 100% | 3.885 | 237 | 9.4% |
+| Random | 31.5% | 3.770 | 230 | 10.9% |
+| ReWiND | 31.5% | 3.781 | 231 | 9.4% |
+| SARM (oracle) | 31.5% | 4.191 | 265 | 20.5% |
+| WARP-BC (IID) | 31.5% | 4.285 | 269 | 18.9% |
+| SCIZOR | 31.5% | 4.299 | 270 | 19.1% |
+| DemInf | 31.5% | 4.332 | 271 | 18.8% |
+| **WARP-BC** | 31.5% | **4.533** | **290** | **25.0%** |
+
+SARM uses *oracle* stage boundaries from simulator state. All curation arms
+share demonstrations, policy architecture and train-step budget; they differ
+**only in which action chunks they train on**.
+
+```
+ (1) train WARP-RM     (2) score + inject      (3) curate + train pi0     (4) rollout + score
+     this repo      ->     this repo        ->        openpi          ->     abc-rabc
+```
+
+## What each arm reproduces
+
+Six arms run end to end from public artifacts. Two do not, and this document
+says so rather than implying otherwise.
+
+| arm | tier | what you can do |
+|---|---|---|
+| Vanilla BC | **full** | no curation; train directly |
+| WARP-BC | **full** | train the RM, score, gate, train pi0 |
+| WARP-BC (IID) | **full** | same, with `--sampler iid` |
+| SCIZOR | **full** | sidecar parquet is published |
+| Random | **full** † | trivially regenerable; the original RNG seed was not recorded, so you reproduce it *in distribution*, not bit-exactly |
+| SARM (oracle) | **full** † | oracle boundaries are derivable from simulator state; the extraction is described below but was not shipped as a script |
+| **ReWiND** | **verify-only** | policy checkpoint and traces are published, so you can verify the *policy*. The curation is **not** regenerable: our code loads a ReWiND reward model, it cannot train one, and the checkpoint used was a third party's. |
+| **DemInf** | **verify-only** | policy checkpoint and traces are published. The MI/KSG scorer that produced the episode keep-list is not part of this release, so the keep-list is not regenerable here. |
+
+For the two verify-only arms, the criterion and threshold are documented so the
+selection is auditable, and the trained policy is published so the reported
+number is checkable. Only the curation step is closed.
+
+## Artifacts
+
+| artifact | where |
+|---|---|
+| episodes | `uynitsuj/sim-bottles-mjwarp-v1` (HF dataset) |
+| WARP-RM checkpoint | `uynitsuj/warp-rm-sim-bottles-sss15` |
+| policy checkpoints (8 arms) | `uynitsuj/paper-sim-policy-checkpoints` |
+| rollout traces | `uynitsuj/paper-sim-n128-traces` (n=128, vanilla + WARP-BC, deterministic replay) and the n=512 sets for the same two arms |
+| dataset metadata | `ds_meta/` — **contains `object_counts.json`, which is not in this git repo** and which training needs |
 
 | repo | branch | pin |
 |---|---|---|
-| [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `paper-repro` | `91f99d6` <!-- TODO: verify after pushing paper-repro --> |
 | [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `release-candidate` | `204eb92dd2af37c4d1189b587d5fbff978383930` |
 | [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `release-candidate` | `9a9fbb5bbf109b726b4130b18cd9826a4e262d45` |
 
-> [!IMPORTANT]
-> **Two openpi branches, two jobs.** `release-candidate` **serves** the released
-> policies (`scripts/serve_paper_sim_policy.py`) and carries no trainer.
-> `paper-repro` is the **training** branch: `scripts/train.py`, the RABC data path,
-> and the two paper-arm configs. Earlier revisions of this document called pi0
-> training "not reproducible" — that was a statement about `release-candidate`
-> only.
+## 1. Train the reward model
 
-```
- (1) train WARP-RM     (2) score + inject      (3) train pi0 w/ WARP-BC    (4) rollout + score
-     this repo      ->     this repo        ->   openpi @ paper-repro   ->    abc-rabc
+```bash
+python scripts/train.py \
+  --lerobot-repo <path-to>/sim-bottles-mjwarp-v1 \
+  --feature-stride 1 --shortest-frac 0.25 --crop-mode squash \
+  --object-counts-json object_counts.json \
+  --source-standard-stride 15 \
+  --tag warp_sss15
 ```
 
-All four links are runnable from public artifacts. Fresh runs match the paper to
-**tolerances, not bit-identically** — see [Limits](#limits-of-fresh-repro) at the end.
+**`--source-standard-stride 15` is the only calibration knob.** The sampler's
+path budget derives from it: centre `= SSS/fps`, half-range `= 2/3 x centre`,
+giving the paper's `Uniform([L/3, 5L/3])` band around one standard-pace window
+(`derive_ar_budget`, `warp_rm/data/samplers.py`). Earlier revisions of this
+document listed `--ar-center-stride-sec` as an unrecoverable parameter; it is
+now derived, so there is nothing left to recover.
 
-## 1–2. Reward model, scoring, injection
+Every run prints two audits. Check them before trusting a head:
 
-See the paper-sim command in the [README](../README.md#quickstart--train-a-warp-rm-on-a-lerobot-dataset).
-The flags are recoverable from the published head's stamped metadata; the one
-exception (`--ar-center-stride-sec`) is discussed at the bottom.
-
-> [!WARNING]
-> **The published sim dataset is 640x480, not square** — verified on the bitstream
-> (`ffprobe` -> `h264 640x480`), and agreed by `meta/info.json`'s `shape` and its
-> encoder-written `info` block for all three cameras. So training or scoring
-> `sim-bottles-mjwarp-v1` **as published** with default flags squashes every frame
-> horizontally by **1.33x**. Pass `--crop-mode center` to avoid that. See
-> [`dataset_schema.md`](dataset_schema.md#frame-geometry--crop-mode).
->
-> This is not cosmetic for step 3: the WARP-BC gate thresholds the raw injected
-> velocity, so the crop you score under decides **which action chunks train**
-> (see [§3 What must be pinned](#what-must-be-pinned)).
->
-> **Open question — was the published dataset the training corpus?** The checkpoint
-> carries no `crop_mode` stamp, so its training geometry is unrecorded. Two signals
-> suggest the corpora may differ: the head's `branch_tag` is
-> `wr_A_rm_perobj_s25_mjwarp_sss15_20k`, and the paper-arm configs reference
-> `sim_put_bottles_mjwarp_rmperobj` / `..._rmsss15` — none of which is
-> `sim-bottles-mjwarp-v1`. A 224x224 center-cropped conversion may have been used
-> upstream (the usual mcap->LeRobot path applies `crop='min(iw,ih)':'min(iw,ih)'`
-> then `scale=224:224`) without being the artifact that got published. Until this is
-> resolved, treat "matches the published head" as unverified either way.
-
-## 3. WARP-BC: build the weighted dataset, then train pi0
-
-### The gate
-
-`openpi/src/openpi/transforms.py::ComputeRABCWeights`, as configured by both paper
-arms (`rabc_use_final_action_condition=True`, `rabc_threshold=1.00`, default
-`rabc_clip_max=1.0`):
-
-```python
-# transforms.py, final-action branch
-final_vel = float(vel[-1])                                  # last frame of the horizon window
-w = float(np.clip(final_vel, None, clip_max)) if final_vel > thr else 0.0
+```
+[path-budget] draw=uniform centre=0.5000s (derived from sss=15) half=0.3333s (derived)
+              -> band [155, 775] feat frames | standard window = 465
+              | train n_feat p50=796 p90=1117 | 0% of the band exceeds p50
+[label-audit] |label|: p50=0.275 p90=0.841 p99=1.340 p99.5=1.426 max=1.665
 ```
 
-So WARP-BC is a **binary keep/drop filter on the chunk-final velocity**: keep iff
-`vel[-1] > 1.0`, otherwise weight 0. Because `clip_max == thr == 1.0`, every kept
-sample gets weight exactly `1.0`, and the loss reduction in
-`scripts/train.py:155-159`
-
-```python
-weighted_loss = per_sample_loss * observation.sample_weights
-loss = jnp.sum(weighted_loss) / (jnp.sum(observation.sample_weights) + 1e-6)
-```
-
-is arithmetically a plain mean over kept samples. Zero-weight samples are also
-dropped up front by the data loader's subset filter (`rabc_reject_zero_weighted`),
-so they cost no compute. On this dataset the gate keeps **~31.5% of chunks**
-(32.55% of frames have `vel > 1.0`).
+For the IID ablation, add `--sampler iid`. That swaps the AR(1) log-speed
+process for an i.i.d. draw with the same marginal; reversal sampling and the
+path budget are unchanged, so only temporal correlation differs.
 
 > [!NOTE]
-> This is *not* the soft `clip(mean(vel over horizon), 0, 1)` weighting that
-> `ComputeRABCWeights` applies with its **defaults** (`threshold=None`,
-> `use_final_action_condition=False`). The defaults are not the paper recipe.
-> `release-candidate` never instantiates the transform at all, and nothing there
-> consumes `sample_weights` — read the wiring on `paper-repro`.
+> **Frame geometry.** The published dataset is 640x480, not square. With
+> `--crop-mode squash` (the default) frames are resized straight to 224x224,
+> compressing the horizontal axis by 1.33x; `--crop-mode center` center-crops
+> first. The released results use `squash`. Which is *better* was never measured
+> end to end, so treat the default as a convention, not a finding — but do use
+> the same mode for scoring as for training, since the gate thresholds the raw
+> injected velocity and the crop therefore decides which chunks train.
 
-### Build the weighted dataset
-
-No extra data release is needed: `sim-bottles-mjwarp-v1` **is** the training corpus
-(LeRobot-v3, 2,438 episodes, 2,228,979 frames — the frame count the arm configs
-were built against). It ships without reward columns, so the only step is to score
-it with the published head and inject the column.
+## 2. Score and inject
 
 ```bash
-hf download uynitsuj/sim-bottles-mjwarp-v1 --repo-type dataset \
-  --local-dir sim-bottles-mjwarp-v1
-hf download uynitsuj/warp-rm-sim-bottles-sss15 --local-dir warp-rm-sss15
-
-# inject per-frame warp_rm_signed_magnitude (+ warp_rm_progress) in place
 python scripts/data/write_warp_rm_annotations.py \
-    --checkpoint warp-rm-sss15/warp_rm_sss15.pt \
-    --lerobot-repo sim-bottles-mjwarp-v1
-
-# openpi resolves a repo_id as $HF_LEROBOT_HOME/<repo_id> (data_loader.py:365)
-ln -s "$PWD/sim-bottles-mjwarp-v1" \
-  "${HF_LEROBOT_HOME:-$HOME/.cache/huggingface/lerobot}/sim_put_bottles_mjwarp_rmsss15"
+  --checkpoint checkpoints/best_model_warp_sss15_no_abs.pt \
+  --lerobot-repo <dataset-copy>
 ```
 
-`warp_rm_signed_magnitude` is the **first** key in openpi's velocity-column
-preference chain on `paper-repro` (`config.py:1003,1072`; `data_loader.py:437`), so
-no renaming is required. Only `release-candidate` lacks that resolution.
+This writes `warp_rm_signed_magnitude` (and `warp_rm_progress`) into the
+dataset copy in place. Copy `meta/` and `data/` and symlink `videos/` — the
+annotation only touches parquet columns, and the feature cache keys off the
+video path, so a symlinked copy reuses the existing cache.
 
-The vanilla arm reads `sim_put_bottles_mjwarp_rmperobj`. It ignores the reward
-column entirely (`rabc_enabled=False`), so the same scored copy works — symlink it
-under that name too.
+Budget roughly **3.5 h per corpus pass** on one H100.
 
-Then compute normalization statistics (the in-repo `assets/` entry for these repos
-is an empty placeholder, `{"norm_stats": {}}`):
+## 3. Curation is one mechanism, not eight configs
+
+Every arm except vanilla selects a subset at a per-arm threshold. Three config
+shapes cover all of them:
+
+| arm | config | parameters |
+|---|---|---|
+| WARP-BC, IID | `LeRobotYamRormDataConfig` | `rabc_threshold`, `rabc_use_final_action_condition=True` |
+| SCIZOR, Random, ReWiND | `LeRobotScizorSidecarDataConfig` | `scizor_sidecar_path`, `scizor_eps_s`, `scizor_weight_mode="binary"`, `scizor_score_column` |
+| DemInf | `deminf_keep_episodes_path` | episode-level keep list |
+
+### Thresholds
+
+**Retention must be matched to 31.5%, and the denominator is not obvious.**
+openpi treats *every frame* as a candidate anchor, so the denominator is all
+**2,228,979 frames**, not the 2,158,277 full-window anchors. Tail anchors where
+`offset+H > L` have their window padded with the episode's last velocity, so
+their decision value is `vel[L-1]`. Calibrating against the truncated anchor
+set sends thresholds the wrong direction.
+
+| arm | criterion | threshold | kept |
+|---|---|---|---|
+| WARP-BC | chunk-final velocity | > 1.0 | 31.5% |
+| WARP-BC (IID) | chunk-final velocity | > 1.047659 | 31.500% |
+| SCIZOR | anchor suboptimality | <= 0.1245 | 31.500% (702,129) |
+| DemInf | per-episode MI (KSG) | >= -7.1791 | 31.502% (850/2438 eps) |
+| Random | U[0,1] per chunk | <= 0.315 | 31.497% |
+
+Thresholds are **per-arm calibrated** because each scorer's distribution
+differs. Applying WARP's 1.0 everywhere silently changes the data budget — the
+IID head keeps 37.03% at thr=1.0, not 31.5%. Any arm whose
+`[rabc_precompute] ... kept (NN.N%)` line does not read ~31.5% is not a matched
+comparison and must be retrained.
+
+**SARM (oracle)** selects chunks inside oracle stage boundaries taken from
+simulator state rather than from a learned model. It is an upper-bound
+reference, not a method you would have at deployment.
+
+## 4. Train the policies
 
 ```bash
-# in openpi @ paper-repro
-uv run scripts/compute_norm_stats.py --config-name pi0_put_bottles_mjwarp_rabc_sss15
-uv run scripts/compute_norm_stats.py --config-name pi0_put_bottles_mjwarp_no_rabc
+cd openpi
+HF_LEROBOT_HOME=<datasets> uv run scripts/train.py <config> \
+  --exp-name <arm> --seed 0 --fsdp-devices 2 \
+  --save-interval 30000 --keep-period 30000 \
+  --checkpoint-base-dir <ckpts> --no-wandb-enabled
 ```
 
-Stats land in `assets/<config-name>/<repo_id>/norm_stats.json`
-(`assets_dirs = ./assets/<config-name>`, `compute_norm_stats.py` writes
-`assets_dirs / repo_id`). **Check the file is non-empty before training** — the
-in-repo entries are `{"norm_stats": {}}` placeholders, and an empty file is not a
-loud failure.
+All arms: pi0, `action_horizon=30`, batch 32, 30,000 steps, cosine decay,
+initialised from `gs://openpi-assets/checkpoints/pi0_base/params`. Equal
+retention equalises effective epochs across arms.
 
-Alternatively copy `assets/` out of the released checkpoint
-(`uynitsuj/paper-sim-policy-checkpoints/<arm>/assets/`) to guarantee the released
-normalization. Because `rmsss15` is a column-only copy of `rmperobj`, one set of
-state/action statistics is valid for both arms.
+> [!IMPORTANT]
+> **Norm stats are keyed by `repo_id`**, resolved at
+> `assets/<config_name>/<repo_id>/norm_stats.json`. A new `repo_id` has no
+> stats and training dies with `Normalization stats not found`. Either run
+> `scripts/compute_norm_stats.py`, or copy the existing stats to the new asset
+> path — the statistics are computed from actions and state, which are
+> identical across curation copies.
 
-### Train the two arms
+## 5. Rollout and score
 
 ```bash
-# WARP-BC arm
-uv run scripts/train.py pi0_put_bottles_mjwarp_rabc_sss15 \
-    --exp-name warp_rabc_sss15 --checkpoint-base-dir ./checkpoints
-# vanilla BC baseline
-uv run scripts/train.py pi0_put_bottles_mjwarp_no_rabc \
-    --exp-name vanilla --checkpoint-base-dir ./checkpoints
+# serve one arm (openpi @ release-candidate)
+python scripts/serve_paper_sim_policy.py --checkpoint-dir <ckpts>/<arm>
+
+# roll out (abc-rabc)
+python batched_runner.py --seeds <512-scene set> --steps 1800
 ```
 
-(`checkpoint_base_dir` defaults to an author-local absolute path; override it.)
+Control stack, fixed for every arm:
 
-Both configs are committed on `paper-repro` and carry the full recipe: pi0 with
-`action_horizon=30`, `batch_size=32`, `num_workers=8`, pi0_base init
-(`gs://openpi-assets/checkpoints/pi0_base/params`), cosine decay over 30k,
-`num_train_steps=30_000`, `save_interval`/`keep_period` 10k. They differ only in
-`repo_id` and `rabc_enabled`.
+| parameter | value |
+|---|---|
+| action horizon predicted | 30 |
+| actions executed per chunk | **30 — all of them** |
+| replan | on chunk exhaustion only |
+| sim timestep | 0.002 s |
+| control decimation | 17 |
+| control rate | 29.4 Hz |
+| replan period | 1.02 s |
+| rollout | 1800 steps = 61.2 s |
+| bottles per scene | 6 |
 
-### What must be pinned
+Execution is fully open-loop in ~1 s blocks: no temporal ensembling and no
+receding-horizon truncation.
 
-Two settings are not recoverable from the checkpoints and change the result:
-
-1. **Scoring geometry** — the gate thresholds the *raw* injected column, so
-   `--crop-mode` changes which ~31.5% of chunks survive. Use the same geometry the
-   published head was trained under; see the open question in §1–2.
-2. **Prompt** — both arms set `prompt_from_task=True`. On the `rmsss15` copy's
-   LeRobot-v3 task table this path resolves to the degenerate prompt `"0"`, which
-   is what the released arms trained on, while the evaluator serves
-   `"Put the plastic bottles in the bin"` (`abc_minimal/eval_policy.py:804`). It is
-   inert for these unconditioned arms — but a rebuilt dataset whose task table
-   resolves to a real string trains a different model, so check `meta/tasks` rather
-   than assuming.
-
-## 4. Rollout and scoring
-
-Deliberately two steps: rollouts write full-horizon qpos traces, and a separate
-offline scorer produces the paper metrics.
-
-```bash
-# ── 1. serve one arm (openpi @ release-candidate)
-hf download uynitsuj/paper-sim-policy-checkpoints --local-dir paper-sim-policy-checkpoints
-uv run scripts/serve_paper_sim_policy.py \
-    --policy warp_rabc_sss15 \
-    --checkpoint-dir paper-sim-policy-checkpoints/warp_rabc_sss15 --port 8000
-# (--policy vanilla --checkpoint-dir paper-sim-policy-checkpoints/vanilla for the baseline)
-
-# ── 2. roll out the n=128 set, 4 shards x 32 worlds (abc-rabc)
-for i in 0 1 2 3; do
-  python -m abc_minimal.eval_policy \
-      --policy-backend pi0 --pi0-host 127.0.0.1 --pi0-port 8000 \
-      --num-worlds 32 --seed $((20260511 + 32*i)) \
-      --no-early-stop \
-      --output-dir local_eval_out/fullhz_warp_sh$i
-done
-
-# ── 3. score offline (arms must be named vanilla / warp)
-python score_bottles.py --trace-dir local_eval_out --arm-glob 'fullhz_{arm}_sh*'
-python score_bottles.py --trace-dir local_eval_out --self-test   # locked paper table
-```
-
-Details that matter:
-
-- **`--policy-backend pi0` is required.** The default backend is `dit` and raises
-  `policy_backend='dit' requires --checkpoint`. In pi0 mode the evaluator forces the
-  blocking full-chunk scheme (`execute_chunk_dim=30`, `num_chunks=60`, no
-  fast-inference, no RTC) = 1800 actions = the 60 s horizon; do not override those.
-- **`--no-early-stop` is required.** Early stop truncates the qpos trace the moment
-  the live primitive first reads 6/6 — and truncates the faster arm more — which
-  makes offline re-scoring invalid.
-- **The world set is the seeds.** World seed = `--seed + world_index`
-  (`eval_policy.py:999`), so the paper's n=128 is base seeds 20260511 / 20260543 /
-  20260575 / 20260607 x 32 worlds = seeds 20260511-20260638, **identical for both
-  arms** (that pairing is what makes the paired *t* valid).
-- **Directory names are load-bearing.** `score_bottles.py` globs
-  `<trace-dir>/fullhz_{arm}_sh*/qpos_trace_*.npz` with arms `vanilla` and `warp`.
-  Each `eval_policy` run writes one flat `--output-dir`, so name them accordingly
-  (or pass your own `--arm-glob`). Each run also drops a `summary.json` recording
-  the full resolved config.
-
-**Success criterion.** A bottle counts as placed iff *any part of it* (5 points
-sampled along its long axis from the free-joint pose) lies inside a **rim-tight
-cylinder**, continuously for **>= 0.5 s** (persistence), **and** is still inside at
-the **60 s** horizon (final-standing).
-
-**Metrics.** bottles/scene (paired *t* vs baseline); pooled from-0 per-bottle
-placement interval; throughput = `sum(count) / sum(effective_time) * 3600`, where
-effective-time is the last-placement time if all bottles were placed, else the 60 s
-horizon; and `>= k` placed rates. `--all-rules` emits the appendix robustness
-ladder (loose-center / tight-center / tight-lowest / tight-anypart).
-
-> [!CAUTION]
-> `eval_policy`'s **live** in-bin count is a loose center-point check used only for
-> rollout control (`early_stop`). It is **not** the paper metric and will not match.
-> Always score offline.
-
-To verify the published table without re-running anything, score the canonical
-traces instead:
-
-```bash
-hf download uynitsuj/paper-sim-n128-traces --repo-type dataset \
-  --local-dir paper-sim-n128-traces
-python score_bottles.py --trace-dir paper-sim-n128-traces --self-test
-```
+Scenes are **paired across arms** — the same 512 world seeds for every arm — so
+contrasts are paired t-tests, not independent samples.
 
 ## Limits of fresh repro
 
-Every link runs from public artifacts, but three sources of variance mean fresh
-numbers land within tolerances rather than on the published values:
-
-| step | why it varies |
+| step | deterministic? |
 |---|---|
-| WARP-RM training | `--batch-size` / `--lr` are not stamped in the published head; checkpoint selection is best-composite, so your run may select a step other than 14,400 |
-| pi0 training | stochastic (data order, JAX nondeterminism); no seed is recorded in either arm config |
-| rollouts | policy sampling + physics are stochastic; compare with the paired n=128 protocol, not trace-by-trace |
+| RM training | no — weight init and window sampling are unseeded, so replicates differ |
+| annotation | yes, given a fixed checkpoint |
+| threshold calibration | yes |
+| pi0 training | no — data order and JAX nondeterminism; no seed recorded |
+| rollouts | no — policy sampling and physics are stochastic |
 
-The canonical traces plus `--self-test` remain the deterministic artifact for the
-published table.
+Compare with the paired n=512 protocol, not trace by trace. The published
+n=128 traces plus `--self-test` are the deterministic artifact.
 
-## The one unrecoverable RM parameter
+Measured seed spread, for calibration: RM composite scores replicate to about
+±0.002 across seeds, so offline differences smaller than ~0.01 are noise. On
+the policy side, three RM heads spanning a large offline range (fine-stride
+velocity Spearman 0.60 to 0.84) produced downstream results that were
+statistically indistinguishable at n=128 (p >= 0.68). **A better offline
+reward model did not produce a better policy in that range** — worth knowing
+before attributing a downstream difference to RM quality.
 
-`--ar-center-stride-sec` is **not stamped** in the published head (verified: no key
-matching `center|stride|half|ar_|sampler|alpha|lambda|flip` at any depth other than
-`feature_stride`, `sampler`, `standard_stride_src`). It is not a free parameter —
-it must track `sss/fps`, else every label rescales by `45/sss`
-([recipe.md §4a](recipe.md)).
+## Traps
 
-For this dataset the ambiguity turns out to be **low-impact**, because the kept
-episodes are shorter than one standard window (465 src frames), so the path budget
-is clipped either way:
-
-| setting | requested path | clipped | mean \|final label\| |
-|---|---|---|---|
-| centre 1.5 s (default) | 465–2325 | 100% | 0.771 |
-| centre 0.5 s (`= sss/fps`) | 155–775 | 100% | 0.594 |
-
-Both are consistent with the stamped `val_vel_magnitude_ratio = 1.0903`, so the
-checkpoint cannot distinguish them — a 1.3x label-scale difference, not 3x. On
-corpora with **long** episodes the same ambiguity is severe. Checkpoints written
-after 2026-08 stamp `ar_center_stride_sec` / `ar_half_range_sec`, closing this.
+1. `object_counts.json` is not in this repo. It ships in `ds_meta/`.
+2. DINOv3 is a gated HF repo; export a token before RM training.
+3. Norm stats are keyed by `repo_id` (see §4).
+4. Use the same `--crop-mode` for scoring as for training.
+5. Retention that is not ~31.5% means the arm is not budget-matched.
