@@ -50,14 +50,16 @@ number is checkable. Only the curation step is closed.
 |---|---|
 | episodes | `uynitsuj/sim-bottles-mjwarp-v1` (HF dataset) |
 | WARP-RM checkpoint | `uynitsuj/warp-rm-sim-bottles-sss15` |
-| policy checkpoints (8 arms) | `uynitsuj/paper-sim-policy-checkpoints` |
-| rollout traces | `uynitsuj/paper-sim-n128-traces` (n=128, vanilla + WARP-BC, deterministic replay) and the n=512 sets for the same two arms |
-| dataset metadata | `ds_meta/` — **contains `object_counts.json`, which is not in this git repo** and which training needs |
+| policy checkpoints | `uynitsuj/paper-sim-policy-checkpoints` — vanilla and WARP-BC published; the other six arms are being uploaded |
+| rollout traces, n=512 | `uynitsuj/paper-sim-n512-traces` — vanilla + WARP-BC, 512 paired scenes each |
+| rollout traces, n=128 | `uynitsuj/paper-sim-n128-traces` — same two arms, the deterministic replay set |
+| dataset metadata | ships with the checkpoint release — **contains `object_counts.json`, which is not in this git repo** and which training needs |
 
-| repo | branch | pin |
-|---|---|---|
-| [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `release-candidate` | `204eb92dd2af37c4d1189b587d5fbff978383930` |
-| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `release-candidate` | `9a9fbb5bbf109b726b4130b18cd9826a4e262d45` |
+| repo | branch | pin | job |
+|---|---|---|---|
+| [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `public/table1-repro` | `9c8e7b75483edd5c2dd5f403109d3b0f16549d60` | **trains** the six arms |
+| [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `release-candidate` | `204eb92dd2af37c4d1189b587d5fbff978383930` | **serves** a checkpoint for rollout |
+| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `release-candidate` | `9a9fbb5bbf109b726b4130b18cd9826a4e262d45` | rollout + scoring |
 
 ## 1. Train the reward model
 
@@ -155,7 +157,7 @@ reference, not a method you would have at deployment.
 ## 4. Train the policies
 
 ```bash
-cd openpi
+cd openpi          # public/table1-repro
 HF_LEROBOT_HOME=<datasets> uv run scripts/train.py <config> \
   --exp-name <arm> --seed 0 --fsdp-devices 2 \
   --save-interval 30000 --keep-period 30000 \
