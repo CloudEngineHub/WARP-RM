@@ -59,7 +59,7 @@ number is checkable. Only the curation step is closed.
 |---|---|---|---|
 | [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `public/table1-repro` | `9c8e7b75483edd5c2dd5f403109d3b0f16549d60` | **trains** the six arms |
 | [`uynitsuj/openpi`](https://github.com/uynitsuj/openpi) | `release-candidate` | `204eb92dd2af37c4d1189b587d5fbff978383930` | **serves** a checkpoint for rollout |
-| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `release-candidate` | `9a9fbb5bbf109b726b4130b18cd9826a4e262d45` | rollout + scoring |
+| [`uynitsuj/abc-rabc`](https://github.com/uynitsuj/abc-rabc) | `public/table1-eval` | `1004945d745b41de044d3e705757be85d6c14a09` | **batched** rollout + scoring |
 
 ## 1. Train the reward model
 
@@ -182,7 +182,8 @@ retention equalises effective epochs across arms.
 # serve one arm (openpi @ release-candidate)
 python scripts/serve_paper_sim_policy.py --checkpoint-dir <ckpts>/<arm>
 
-# roll out (abc-rabc)
+# roll out (abc-rabc @ public/table1-eval — batched; release-candidate has
+# only the serial eval_policy.py and cannot run this)
 python batched_runner.py --seeds <512-scene set> --steps 1800
 ```
 
