@@ -45,29 +45,6 @@ WARP-RM trains and scores on **LeRobot v2.1 / v3.0** datasets of *successful*
 demonstrations (see [`docs/dataset_schema.md`](docs/dataset_schema.md) for the
 expected layout). The defaults **are** the recipe:
 
-> [!IMPORTANT]
-> **Is your dataset's video already square?** Check
-> `meta/info.json → features.<camera>.shape` before your first run.
->
-> The default `--crop-mode squash` resizes each frame straight to 224×224
-> ignoring aspect ratio. That is a **no-op for square video** (the resize is
-> skipped), which is why it is the default — every dataset produced by the usual
-> LeRobot conversion scripts is already center-cropped to square at encode time.
->
-> But if your videos are stored at a **native non-square** ratio — e.g.
-> `[720, 1280, 3]`, very common for off-the-shelf recordings — the default
-> **horizontally compresses every frame by 1.78×** and hands DINOv3 distorted
-> geometry (circles become ellipses). Pass `--crop-mode center` to center-crop to
-> the largest centered square first, matching what the conversion scripts do:
->
-> ```bash
-> python scripts/train.py --crop-mode center --lerobot-repo /path/to/dataset
-> ```
->
-> The mode is part of the feature-cache key and is stamped into the checkpoint,
-> so scoring, rendering and the inspector all reproduce it automatically — you
-> only set it at train time. See [`docs/dataset_schema.md`](docs/dataset_schema.md#frame-geometry--crop-mode).
-
 ```bash
 # Real T-shirt folding recipe: bidirectional attention, fs3/sss45, window 32, 15k steps.
 python scripts/train.py --lerobot-repo /path/to/your/lerobot/dataset
