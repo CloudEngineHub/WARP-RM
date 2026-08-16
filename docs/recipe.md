@@ -66,13 +66,19 @@ With `SOURCE_STANDARD_STRIDE = 45`, `N = 32`: standard-pace forward → `[0,1]`,
 2× pace → `[0,2]`, reversed → `[-1,0]`, mid-rewind → non-monotonic / negative.
 These are cumulative signed progress values relative to the window's first frame.
 
-### 4a. Changing `--source-standard-stride` — retune the sampler with it
+### 4a. Changing `--source-standard-stride` — the sampler follows it
 
 **`--source-standard-stride` (SSS) and `--ar-center-stride-sec` are two halves of
-one calibration, and nothing in the code couples them.** SSS sets the label
-denominator (§4); the AR sampler's centre stride sets how far a window actually
-travels (§3). Changing one without the other rescales every label by
-`45 / SSS_new`.
+one calibration, and the code now couples them** (`derive_ar_budget`,
+`warp_rm/data/samplers.py`). SSS sets the label denominator (§4); the AR
+sampler's centre stride sets how far a window actually travels (§3). Changing
+one without the other rescales every label by `45 / SSS_new`, so SSS is the
+single knob and the sampler derives from it.
+
+`--ar-center-stride-sec` and `--ar-half-range-sec` default to `-1`, meaning
+*derive*. Pass a number to either one to override it; every run prints a
+`[path-budget]` line reporting the realized band and whether each value was
+derived or explicit.
 
 The invariant that keeps "standard pace ⇒ velocity 1.0":
 
@@ -83,8 +89,11 @@ path_src      = center_stride_sec · fps · (N-1)   # §3, ARSampler.__init__
 ⇒ centred at 1.0  ⟺  center_stride_sec = SSS / fps
 ```
 
-Default: `45 / 30 = 1.5 s` ✓. Keep `ar_half_range_sec / ar_center_stride_sec` at
-its default ratio (`1.0 / 1.5 = ⅔`) so the *relative* speed band is unchanged:
+Default: `45 / 30 = 1.5 s` ✓ — the value that used to be hardcoded, so adopting
+the derivation changes nothing at the default SSS. The half-range derives as
+`⅔ × centre` (the ratio these defaults have always had, `1.0 / 1.5`), which keeps
+the *relative* speed band invariant to SSS. The table below is what the code now
+produces, not a list to apply by hand:
 
 | SSS | `--ar-center-stride-sec` | `--ar-half-range-sec` |
 |---|---|---|

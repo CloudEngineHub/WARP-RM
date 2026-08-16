@@ -331,6 +331,54 @@ class EvalSampler:
         return windows
 
 
+# ARSampler's own frame-rate default. It appears on both sides of the
+# path-budget derivation below and cancels, so the derived budget is correct
+# whatever the dataset's true frame rate. See derive_ar_budget.
+SAMPLER_FPS = 30.0
+
+
+def derive_ar_budget(
+    source_standard_stride: int,
+    center_stride_sec: float | None = None,
+    half_range_sec: float | None = None,
+    fps: float = SAMPLER_FPS,
+) -> tuple[float, float, bool, bool]:
+    """Couple the AR path budget to the standard stride (docs/recipe.md 4a).
+
+    ``source_standard_stride`` (SSS) sets the label denominator; the sampler's
+    centre stride sets how far a window actually travels. They are two halves
+    of one calibration:
+
+        label(window) = path_src / ((N-1) * SSS)
+        path_src      = center_stride_sec * fps * (N-1)
+        => a standard-pace window lands on 1.0  <=>  center = SSS / fps
+
+    The fps cancels against the one inside ``ARSampler``, so the derived centre
+    is exactly one standard-pace window — ``standard_feat_steps * (N-1)``
+    feature frames — for any dataset frame rate.
+
+    ``half_range_sec`` derives as 2/3 of the centre, the ratio the project
+    defaults have always had (1.0 / 1.5), which keeps the *relative* speed band
+    invariant to SSS.
+
+    Args:
+        source_standard_stride: SSS, in source frames.
+        center_stride_sec: explicit centre, or None/negative to derive.
+        half_range_sec: explicit half-width, or None/negative to derive.
+        fps: frame rate used for the seconds<->frames conversion.
+
+    Returns:
+        (center_stride_sec, half_range_sec, center_derived, half_derived)
+    """
+    center_derived = center_stride_sec is None or center_stride_sec < 0
+    if center_derived:
+        center_stride_sec = source_standard_stride / fps
+    half_derived = half_range_sec is None or half_range_sec < 0
+    if half_derived:
+        half_range_sec = (2.0 / 3.0) * center_stride_sec
+    return float(center_stride_sec), float(half_range_sec), center_derived, half_derived
+
+
 class ARSampler(TrajectorySampler):
     """
     Sampler backed by the AR(1) curve parameterization.
