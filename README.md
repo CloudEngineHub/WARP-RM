@@ -9,7 +9,7 @@ WARP-RM learns a dense, signed relative-progress signal ($v_t$) from robot manip
 ## Installation
 
 ```bash
-git clone [https://github.com/uynitsuj/WARP-RM.git](https://github.com/uynitsuj/WARP-RM.git) && cd WARP-RM
+git clone https://github.com/uynitsuj/WARP-RM.git && cd WARP-RM
 uv sync                       # core (training + scoring)
 uv sync --extra wandb         # optional W&B logging
 ```
@@ -82,14 +82,26 @@ Evaluated on a simulated bottle-in-bin environment (**512 paired scenes $\times$
 To reproduce the full pipeline end-to-end across companion repositories:
 
 ```bash
-# 1. Clone evaluation and policy training repos
-git clone [https://github.com/uynitsuj/abc-rabc.git](https://github.com/uynitsuj/abc-rabc.git) && git -C abc-rabc checkout 59db543d
-git clone [https://github.com/uynitsuj/openpi.git](https://github.com/uynitsuj/openpi.git) openpi-train && git -C openpi-train checkout 9c8e7b75
+# 1. Training + batched rollout
+git clone https://github.com/uynitsuj/abc-rabc.git && git -C abc-rabc checkout 59db543d
+git clone https://github.com/uynitsuj/openpi.git openpi-train && git -C openpi-train checkout 9c8e7b75
 
-# 2. Audit published traces on n=128 deterministic set
+# 2. Verify the scorer reproduces the locked table.
+#    Uses the n=128 deterministic set: --self-test asserts those exact cells
+#    (n==128, 3.98 -> 4.67, diff 0.695) and will NOT accept the n=512 set.
+#    score_bottles.py lives on release-candidate, not on the branch above.
+git clone https://github.com/uynitsuj/abc-rabc.git abc-rabc-score \
+  && git -C abc-rabc-score checkout 9a9fbb5b
 hf download uynitsuj/paper-sim-n128-traces --repo-type dataset --local-dir traces/paper-sim-n128
-python abc-rabc/score_bottles.py --trace-dir traces/paper-sim-n128 --self-test
+python abc-rabc-score/score_bottles.py --trace-dir traces/paper-sim-n128 --self-test
+
+# 3. The n=512 traces behind the table above (score without --self-test)
+hf download uynitsuj/paper-sim-n512-traces --repo-type dataset --local-dir traces/paper-sim-n512
 ```
+
+> The self-test is a **scorer-integrity check**, not the headline result: it
+> asserts the locked n=128 cells under the paper's scoring rule, which is why
+> its numbers (3.98 → 4.67) differ from the n=512 table above (3.885 → 4.533).
 
 See [`docs/reproduce_sim.md`](docs/reproduce_sim.md) for detailed instructions on training $\pi_0$ policies, applying the chunk gate, and running batched MuJoCo rollouts.
 
