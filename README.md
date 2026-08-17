@@ -276,13 +276,6 @@ the ambiguity is low-impact, quantified in
 episode count surviving the filter. Checkpoints written after 2026-08 stamp the
 sampler calibration.
 
-> [!WARNING]
-> **The published sim dataset is 640x480, not square** (verified on the bitstream),
-> so training on it with default flags squashes frames 1.33x — pass
-> `--crop-mode center`. Whether the *released head* saw squashed or pre-cropped
-> frames is unrecorded (no `crop_mode` stamp) and the published dataset may not be
-> the training corpus; see [`docs/reproduce_sim.md`](docs/reproduce_sim.md).
-
 **Full recipe — the WARP-BC gate, the weighted-dataset build, both pi0 arm configs,
 the n=128 rollout protocol, and the eval success criterion — is in
 [`docs/reproduce_sim.md`](docs/reproduce_sim.md).**
