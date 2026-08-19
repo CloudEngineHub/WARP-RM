@@ -72,20 +72,28 @@ python scripts/train.py \
   --tag warp_sss15
 ```
 
-**`--source-standard-stride 15` is the only calibration knob.** The sampler's
-path budget derives from it: centre `= SSS/fps`, half-range `= 2/3 x centre`,
-giving the paper's `Uniform([L/3, 5L/3])` band around one standard-pace window
-(`derive_ar_budget`, `warp_rm/data/samplers.py`). Earlier revisions of this
-document listed `--ar-center-stride-sec` as an unrecoverable parameter; it is
-now derived, so there is nothing left to recover.
+**`--source-standard-stride 15` sets the label calibration.** The sampler's
+path budget stays at the fixed Table-I-era defaults: centre 1.5 s, half-range
+1.0 s — a `[0.5, 2.5]` s band — and the C51 support stays fixed at ±3.0.
+These ARE the values the Table I reward model trained with; do not override
+them when reproducing the table.
+
+An earlier revision of this repo (2026-08-15, PR #2) derived the band from
+SSS (`centre = SSS/fps`, `half = 2/3 × centre`) and auto-sized the C51
+support, as defaults. Measured downstream at n=512 those defaults cost
+−0.486 bottles/scene against the fixed values above (p=2e-08, paired, same
+seed/recipe/eval), so PR #3 pinned the defaults back. Both derivations remain
+available as explicit opt-ins (`--ar-center-stride-sec -1`,
+`--ar-half-range-sec -1`, `--auto-bin-range`) — do not use them for Table I.
 
 Every run prints two audits. Check them before trusting a head:
 
 ```
-[path-budget] draw=uniform centre=0.5000s (derived from sss=15) half=0.3333s (derived)
-              -> band [155, 775] feat frames | standard window = 465
-              | train n_feat p50=796 p90=1117 | 0% of the band exceeds p50
-[label-audit] |label|: p50=0.275 p90=0.841 p99=1.340 p99.5=1.426 max=1.665
+[path-budget] centre=1.5000s (explicit) half=1.0000s (explicit)
+              -> band [465, 2325] feat frames | standard window = 465
+              | train n_feat p50=796 p90=1117
+[label-audit] |label|: p50=0.516 p90=1.372 p99=2.099 p99.5=2.217 max=2.551
+[label-audit] clamped by the +-3.0 support: 0.00% of labels
 ```
 
 For the IID ablation, add `--sampler iid`. That swaps the AR(1) log-speed
