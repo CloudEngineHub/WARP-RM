@@ -263,14 +263,18 @@ class Args:
     labels exceed the support and clamp — e.g. sss15 on 60Hz data reaches
     |label| ~5 on the longest episodes (2.96% of tokens clamped)."""
 
-    auto_bin_range: bool = True
+    auto_bin_range: bool = False
     """Size the C51 relative-head support to the label distribution the sampler
     actually produces (p99.5 x 1.15, rounded up to 0.05) instead of a fixed
-    +-3. This is the third arm of the same coupling: SSS is the one tunable,
-    the path budget derives from it (--ar-center-stride-sec), and the support
-    derives from the labels that result. Nothing to keep in sync by hand, and
-    no silent clamping when SSS moves. The saturation audit prints either way.
-    An explicit --rel-bin-max still wins."""
+    +-3. OFF by default since 2026-08-19: as a default (shipped 2026-08-15,
+    PR #2) it resized the support to +-1.45 at sss15, which parks the curation
+    threshold (1.0) at 69% of the half-range with the whole upper tail packed
+    against the edge bin. Measured downstream at n=512 (paired, tight-anypart):
+    the auto-sized default's arm scored 3.904 vs 4.391 for the fixed +-3
+    support with the same seed/recipe/eval (p=2e-08, jointly with the derived
+    path budget below). Opt in per-run when the label distribution genuinely
+    outgrows +-3 (e.g. sss15 on 60 Hz data); the saturation audit prints
+    either way, and an explicit --rel-bin-max still wins."""
 
     feature_stride: Optional[int] = None
     """Override FEATURE_STRIDE (default 3 — every 3rd source frame produces
@@ -303,32 +307,33 @@ class Args:
     value of the AR temporal correlation); reversal sampling and path budget
     unchanged. Only affects training-time window sampling; not inference."""
 
-    ar_center_stride_sec: float = -1.0
+    ar_center_stride_sec: float = 1.5
     """(ar only) Centre of per-step stride distribution, in seconds. The
     sampler samples a path budget in [center - half_range, center + half_range]
     seconds-per-step, then an AR(1) speed process modulates individual gaps.
 
-    -1 = DERIVED from --source-standard-stride (default since 2026-08-15).
-    SSS sets the label denominator and this sets how far a window actually
-    travels; they are two halves of one calibration, so the code now couples
-    them instead of asking the caller to keep two numbers in sync:
+    Fixed 1.5 s default again since 2026-08-19. Pass -1 to DERIVE from
+    --source-standard-stride (centre = SSS/fps, the 2026-08-15 PR #2
+    behavior): SSS sets the label denominator and this sets how far a window
+    travels, so the derivation keeps them in sync —
 
         label(window) = path_src / ((N-1) * SSS)
-        path_src      = center_stride_sec * fps * (N-1)
         => centred at 1.0  <=>  center_stride_sec = SSS / fps
 
-    The fps cancels — the derived budget is exactly one standard-pace window,
-    standard_feat_steps * (N-1) feature frames — so this is correct whatever
-    the dataset's true frame rate. At the default SSS=45 it derives 1.5 s,
-    which is the value that was hardcoded here before, so defaults are
-    unchanged. At SSS=15 it derives 0.5 s; leaving 1.5 s there rescaled every
-    label by 45/15 and clipped the fast tail. Pass a value to override."""
+    but as the DEFAULT the derivation was measured to hurt downstream: at
+    sss15 it derives a [0.167, 0.833] s band, narrower on both sides than any
+    band this recipe had ever run (the arm that motivated the ship used
+    centre 0.5 with half_range LEFT AT 1.0 — band [0, 1.5] s, 37.2% retention;
+    the derived band retains 29.3%). Its arm scored 3.904 vs 4.391 for these
+    fixed defaults at n=512, same seed/recipe/eval (p=2e-08, jointly with
+    auto_bin_range above)."""
 
-    ar_half_range_sec: float = -1.0
+    ar_half_range_sec: float = 1.0
     """(ar only) Half-width of the uniform path-budget band around center.
-    -1 = DERIVED as 2/3 * centre, the ratio these defaults have always had
-    (1.0 / 1.5), so the RELATIVE speed band is invariant to SSS. Pass a value
-    to override."""
+    Fixed 1.0 s default again since 2026-08-19 (band [0.5, 2.5] s — the
+    paper's Uniform([1/3 L, 5/3 L]) at the 1.5 s centre). Pass -1 to DERIVE
+    as 2/3 * centre (PR #2 behavior; see ar_center_stride_sec for why that
+    is no longer the default)."""
 
     ar_alpha: float = 0.5
     """(ar only) AR(1) autocorrelation coefficient for log-speed process.
@@ -417,7 +422,7 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    source_standard_stride_override: Optional[int] = None,
                    feature_stride_override: Optional[int] = None,
                    rel_bin_max_override: Optional[float] = None,
-                   auto_bin_range: bool = True,
+                   auto_bin_range: bool = False,
                    progress_shape: str = "uniform",
                    balance_repos: bool = False,
                    weight_by_length: bool = False,
@@ -443,8 +448,8 @@ def run_experiment(ablation: AblationConfig, mode: str = "online",
                    label_anchor_frames: int = 15,
                    sampler_type: str = "continuous",
                    crop_mode: str = "squash",
-                   ar_center_stride_sec: float = -1.0,
-                   ar_half_range_sec: float = -1.0,
+                   ar_center_stride_sec: float = 1.5,
+                   ar_half_range_sec: float = 1.0,
                    ar_alpha: float = 0.5,
                    ar_lambda_reversals: float = 1.0,
                    ar_p_full_flip: float = 0.5,
